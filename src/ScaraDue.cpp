@@ -261,32 +261,6 @@ bool ScaraDue::Init(){
   _L1 = 200;
   _L2 = 200;
 
-  // Initialize limit switches and other Oriental Motor pins
-  pinMode(TH1_Zhome, OUTPUT);
-  pinMode(TH2_Zhome, OUTPUT);
-  pinMode(TH1_Stop, OUTPUT);
-  pinMode(TH2_Stop, OUTPUT);
-  pinMode(TH1_Moving, INPUT_PULLUP);
-  pinMode(TH2_Moving, INPUT_PULLUP);
-  pinMode(TH1_Ready, INPUT_PULLUP);
-  pinMode(TH2_Ready, INPUT_PULLUP);
-
-  // Disable TH1, TH2 motion
-  digitalWrite(TH1_Stop, LOW);
-  digitalWrite(TH2_Stop, LOW); 
-
-  digitalWrite(TH1_Zhome, LOW);
-  digitalWrite(TH2_Zhome, LOW); 
-
-  // Enable TH1, TH2 motion
-  digitalWrite(TH1_Stop, HIGH);
-  digitalWrite(TH2_Stop, HIGH); 
-
-  // Initialise other peripherals
-
-
-
-
   return init_motor_pins;
 }
 
@@ -1142,33 +1116,6 @@ bool ScaraDue::_checkValidTrajectory(float trg_x, float trg_y) {
 
 
 #pragma endregion
-
-void ScaraDue::Check_Th1Th2_moving(){
-  _th1_isMoving = !digitalRead(TH1_Moving);  //1-> Not moving; 0-> Moving
-  _th2_isMoving = !digitalRead(TH2_Moving); 
-}
-
-bool ScaraDue::ExecuteHomingProcedure(){
-  if(!_homingStarted)
-    return false;
-
-    
-}
-
-bool ScaraDue::StartHomingProcedure(float home_x, float home_y, float home_z, float home_r){
-  // Make sure the robot is in stop mode
-  if(controlMode != STP)
-    return false;
-
-  _isHomed = false;
-  _isHomed_Z = false;
-  _isHomed_XY = false;
-  _isHomed_R = false;
-  _homingStarted = true;
-
-}
-
-
 
 #pragma region Timers_Control_Routines
 
