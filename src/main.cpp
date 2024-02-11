@@ -32,6 +32,54 @@ static const u_int8_t MAX_ARGS = 9; // max number of arguments for a command
 static float args[MAX_ARGS];  // arguments array
 static uint32_t sample_time = 100; // Main loop 'cycle time' (delay at the end of the loop)
 
+void readSerialCommand();
+uint8_t splitCommand(char *ptr, const char *delimiter1, const char *delimiter2, char *cmdCode , float *cmdArgs);
+bool executeCommand(const char *cmdCode, float *cmdArgs, uint8_t argCount);
+
+int main(void){
+  Serial.begin(115200);
+  SCARA.SetSteppersGPIOPort(PIOC);
+  SCARA.SetAxis_Z(200, 5.0, 17, 16);  // PIN NUMBERS - pls: 46, dir: 47, ppr: 5000
+  SCARA.SetAxis_TH1(200, 13, 12);   // PIN NUMBERS - cw : 50, ccw: 51, ppr:100000
+  SCARA.SetAxis_TH2(200, 15, 14);   // PIN NUMBERS - cw : 48, ccw: 49, ppr:100000
+  SCARA.SetAxis_TH3(200, 19, 18);    // PIN NUMBERS - pls: 44, dir: 45, ppr:25000
+  if (!SCARA.Init())
+    Serial.println("SCARA INIT FAIL");
+  delay(1000);
+
+  //SCARA.Move_TrajectoryMode(10, 10, 0, 0, 0.8, 0);
+
+  SCARA.Move_ManualMode(20, 0, 0, 0, 50);
+  //delay(3000); // here we have to wait until previous move finishes (controlMode = STP)
+
+  while(SCARA.Z.isTimerOn() || SCARA.TH1.isTimerOn() || SCARA.TH2.isTimerOn() || SCARA.TH3.isTimerOn()){
+    delay(200);
+  }
+
+  SCARA.Move_ManualMode(-20, 0, 0, 0, 50);
+
+  while(1){
+    uint32_t start = millis(); // read start time
+
+    // Read any incoming serial command
+    readSerialCommand();
+
+    // Read sensors and digital inputs status
+  
+
+    uint32_t finish = millis();  // read finish time
+    //Calculate cycle time duration
+    uint32_t duration = finish - start;
+    /*To obtain a fixed sample time, the cycle time duration is subtracted   
+    from the sample time, and the difference is added to the code as a delay*/
+    uint32_t t_delay = sample_time - duration;
+    if (t_delay > 0) {delay(t_delay);}
+  }
+
+}
+
+
+
 /** Split incoming serial command and extract command code and command arguments
  * @param ptr pointer to incoming serial data
  * @param delimiter1 delimiter character between command code and command parameters
@@ -168,52 +216,3 @@ void readSerialCommand(){
     }
   }  
 }
-
-void setup() {
-  // put your setup code here, to run once:
-  // WARNING: using pin mask overrides previous motor pins configuration???
-  Serial.begin(115200);
-  SCARA.SetSteppersGPIOPort(PIOC);
-  SCARA.SetAxis_Z(200, 5.0, 17, 16);  // PIN NUMBERS - pls: 46, dir: 47, ppr: 5000
-  SCARA.SetAxis_TH1(200, 13, 12);   // PIN NUMBERS - cw : 50, ccw: 51, ppr:100000
-  SCARA.SetAxis_TH2(200, 15, 14);   // PIN NUMBERS - cw : 48, ccw: 49, ppr:100000
-  SCARA.SetAxis_TH3(200, 19, 18);    // PIN NUMBERS - pls: 44, dir: 45, ppr:25000
-  if (!SCARA.Init())
-    Serial.println("SCARA INIT FAIL");
-  delay(1000);
-
-  //SCARA.Move_TrajectoryMode(10, 10, 0, 0, 0.8, 0);
-
-  SCARA.Move_ManualMode(20, 0, 0, 0, 50);
-  //delay(3000); // here we have to wait until previous move finishes (controlMode = STP)
-
-  while(SCARA.Z.isTimerOn() || SCARA.TH1.isTimerOn() || SCARA.TH2.isTimerOn() || SCARA.TH3.isTimerOn()){
-    delay(200);
-  }
-
-  SCARA.Move_ManualMode(-20, 0, 0, 0, 50);
-  //SCARA.steppers[0].SetMotorPins(PIOC, 17, 16); // Configure Z motor
-  //SCARA.steppers[1].SetMotorPins(PIOC, 13, 12); // Configure TH1 motor
-  //SCARA.steppers[2].SetMotorPins(PIOC, 15, 14); // Configure TH2 motor
-  //SCARA.steppers[3].SetMotorPins(PIOC, 19, 18); // Configure TH3 motor
-}
-
-void loop() {
-  uint32_t start = millis(); // read start time
-
-  // Read any incoming serial command
-  readSerialCommand();
-
-  // Read sensors and digital inputs status
- 
-
-  uint32_t finish = millis();  // read finish time
-  //Calculate cycle time duration
-  uint32_t duration = finish - start;
-  /*To obtain a fixed sample time, the cycle time duration is subtracted   
-  from the sample time, and the difference is added to the code as a delay*/
-  uint32_t t_delay = sample_time - duration;
-  if (t_delay > 0) {delay(t_delay);}
-
-}
-
