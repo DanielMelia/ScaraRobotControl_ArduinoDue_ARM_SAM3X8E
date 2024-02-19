@@ -8,88 +8,248 @@
  * Move_TrajectoryMode : set isMovingZ and isMovingXYR = false at the beginning
  * checkPositionIsWithinWS : need to add limit switches logic. Not checking R axis
  * Documenting the code https://www.doxygen.nl/manual/docblocks.html
+ * HOMING: try putting this before the _homeStartXY
 */
-
-ScaraDue SCARA;
 
 // By default GCC shows a warning on #pragma region
 // On platform.ini add:
 //    build_flags = 
 //        -Wno-unknown-pragmas
 
+ScaraDue SCARA;
 
-#pragma region Setup_Stepper_Motors
+#pragma region DEV_TEST_FUNCTIONS
 
-/// @brief Configure a GPIO pin as an Input/Output and configure the pull-up resistors
-/// @param GPIO_x GPIO port
-/// @param pin_number GPIO pin number
-/// @param mode pin mode: Output, Input or Input_PullUp
-void GPIO_Pin_Setup(Pio* GPIO_x, uint8_t pin_number, PinMode mode){
-  if(mode == Output){
-    GPIO_x->PIO_PER |= (1<<pin_number);  // Enable the GPIO pin
-    GPIO_x->PIO_OER |= (1<<pin_number);  // Enable output mode for the GPIO pin (set it as output)
-  }else if(mode == Input){
-    GPIO_x->PIO_PER |= (1<<pin_number);  // Enable the GPIO pin
-    GPIO_x->PIO_ODR |= (1<<pin_number);  // Disable output mode for the GPIO pin (set it as input)
-    GPIO_x->PIO_PUDR |= (1<<pin_number); // Disable pull-up resistor for the GPIO pin
-  }else if(mode == Input_PullUp){
-    GPIO_x->PIO_PER |= (1<<pin_number);  // Enable the GPIO pin
-    GPIO_x->PIO_ODR |= (1<<pin_number);  // Disable output mode for the GPIO pin (set it as input)
-    GPIO_x->PIO_PUER |= (1<<pin_number); // Enable pull-up resistor for the GPIO pin
+void ScaraDue::DEV_testAuxiliaryPins(){
+  while(1){
+    GPIO_Pin_Write(GPIO_PORT_AUXILIARY, PIN_RING_LED, true);
+    GPIO_Pin_Write(GPIO_PORT_AUXILIARY, PIN_VALVE_1, true);
+    GPIO_Pin_Write(GPIO_PORT_AUXILIARY, PIN_VALVE_2, true);
+    delay(1000);
+    GPIO_Pin_Write(GPIO_PORT_AUXILIARY, PIN_RING_LED, false);
+    GPIO_Pin_Write(GPIO_PORT_AUXILIARY, PIN_VALVE_1, false);
+    GPIO_Pin_Write(GPIO_PORT_AUXILIARY, PIN_VALVE_2, false);
+    delay(1000);
+
+    bool ps24v_ok = GPIO_Pin_Read(GPIO_PORT_AUXILIARY, PIN_PS24V_OK);
+    bool ps48v_ok = GPIO_Pin_Read(GPIO_PORT_AUXILIARY, PIN_PS48V_OK);
+
+    //int ps24v_ok = digitalRead(28);
+    //int ps48v_ok = digitalRead(29);
+
+    bool b_true = true;
+    bool b_false = false;
+
+    Serial.print(ps24v_ok);Serial.print(";");Serial.print(ps48v_ok);Serial.print(" - ");Serial.print(b_true);Serial.print(";");Serial.println(b_false);
   }
 }
 
-/// @brief Read GPIO pin state
-/// @param GPIO_x  GPIO port
-/// @param pin_number GPIO pin number
-/// @return TRUE if pin is set HIGH. FALSE otherwise
-bool GPIO_Pin_Read(Pio* GPIO_x, uint8_t pin_number){
-  // Read the Pin Data Status Register
-  return (GPIO_x->PIO_PDSR & (1 << pin_number)) != 0; 
-  // Inequality comparison checks if the result of the bitwise and is not zero. If result is NOT ZERO, means pin is HIGH, and will return TRUE
-  // (PIOA_PDSR & (1 << pin)) ? HIGH : LOW // this uses ternary (or conditional) operator, and returs a uint8_t
+void ScaraDue::DEV_testStepPins(){
+  while(1){
+    _step_TH1();
+    _step_TH2();
+    _step_TH3();
+    _step_Z();
+    delay(1000);
+    //Serial.print(ps24v_ok);Serial.print(";");Serial.print(ps48v_ok);Serial.print(" - ");Serial.print(b_true);Serial.print(";");Serial.println(b_false);
+  }
 }
 
-/// @brief Writes HIGH/LOW to a GPIO pin
-/// @param GPIO_x  GPIO port
-/// @param pin_number GPIO pin number
-/// @param value TRUE sets the pin to HIGH. FALSE clears the pin
-void GPIO_Pin_Write(Pio* GPIO_x, uint8_t pin_number, bool value){
-  if(value)
-    GPIO_x->PIO_SODR |= (1 << pin_number); // Set output high
-  else
-    GPIO_x->PIO_CODR |= (1 << pin_number); // Set output low
+void ScaraDue::DEV_testPressureSensor(){
+  while(1){
+    // Read sensors and digital inputs status
+    if (dPress.Available() == true) {
+      float pressure = dPress.readPressure();
+      if(!isnan(pressure)){
+        Serial.println(pressure);
+      }else{
+        Serial.println("nan");
+      }
+    }else{
+      Serial.println("Not Available");
+    }
+    delay(1000);
+  }
 }
 
-/** Sets the GPIO port that controls the stepper motors
-* @param GPIO_x Pio Hardware Register. Select PIOA, PIOB, PIOC, PIOD
+
+#pragma endregion
+
+/** Initialise SCARA robot
+ * - Initialise axes parameters
+ * - Initialise stepper motors pulse-direction pins
+ * - Inititalise limit switches and other Oriental Motor pins
+ * - Initialise auxiliary components
 */
-void ScaraDue::SetSteppersGPIOPort(Pio* GPIO_x){
-  _GPIO_STEPPERS = GPIO_x;
-  Serial.println("1 - Steppers GPIO Port Set");
+bool ScaraDue::Init(){
+  // configure Timers
+  _prescaler = 8;
+
+  // configure / Initialise axes
+  _initialiseAxesParameters(); 
+  bool init_motor_pins = _initialiseMotorPins();
+  _lowest_z = 100;
+
+  Z._minPos = 0;
+  Z._maxPos = 100;
+  _L1 = 200;
+  _L2 = 200;
+
+  // Initialize limit switches and other Oriental Motor pins
+  _setLimitSwitchesPins();
+  _setIOSignalsPins_TH1();
+  _setIOSignalsPins_TH2();
+
+  // Initialise auxiliary components
+  _setAuxiliaryComponents();
+
+  return init_motor_pins;
 }
 
-/** Set axis Z main parameters
- * @param PPR axis pulses per revolution
- * @param pitch axis pitch in mm per revolution
- * @param pulse_pin port pin number (not physical pin) of the pulse signal
- * @param dir_pin pin used for setting motor direction (port pin unmber)
-*/
-void ScaraDue::SetAxis_Z(uint32_t PPR, float pitch, uint8_t pulse_pin, uint8_t dir_pin){
-  _PLS_PIN_Z = pulse_pin;
-  _DIR_PIN_Z = dir_pin;
-  Z._ppr = PPR;
-  Z._pitch_mm = pitch;
+void ScaraDue::MainLoopFunction(bool serialSend){
+  // Check Digital Input Feedback Signals
+  _th1_isMoving = !GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_TH1_MOVING);
+  _th2_isMoving = !GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_TH2_MOVING);
+  _th1_isReady = !GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_TH1_READY);
+  _th2_isReady = !GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_TH2_READY);  
+  _isPS24V_ok = GPIO_Pin_Read(GPIO_PORT_AUXILIARY, PIN_PS24V_OK);  
+  _isPS48V_ok = GPIO_Pin_Read(GPIO_PORT_AUXILIARY, PIN_PS48V_OK);  
+
+  // Check that feedback from driver match with expected state (TH1.isMoving == _th1_isMoving)
+
+  // Check if Release with puff needs to be executed
+  _releaseWthPuff();
+
+  // Get Valves Sate
+  _valvesState = readValves();
+
+  // Read Pressure Sensor
+  float _raw_pressure = readAirPressure();
+
+  // Process Pressure
+  _airPressure = _raw_pressure * _pressureFilterGain + _prevAirPressure * (1 - _pressureFilterGain);
+  _pressureChange = _airPressure - _prevAirPressure;
+  _prevAirPressure = _airPressure;  
+
+  // Homing Procedure
+  _executeHomingProcedure();
+
+  // End-Effector Position Update
+  UpdateEndEffectorCartesianPosition();
+
+  // Check Position is in range
+  checkPositionIsWithinWS(_curr_x, _curr_y, _curr_z, _curr_r);
+
+  // Check if timers are ON (robot is stopped or moving)
+  if(TH1._isTimerOn || TH2._isTimerOn || Z._isTimerOn || TH3._isTimerOn){
+    _isMoving = true;
+  }else{
+    _isMoving = false;
+    _controlMode = STP;
+  }
+
+  // Send Serial Output
+  if(serialSend){
+    Serial.print(_isHomed);Serial.print(";");            // Data 0
+    //PositionXYZR pos = SCARA.GetCurrentPosition();
+    Serial.print(_curr_x, 3);Serial.print(";");          // Data 1
+    Serial.print(_curr_y, 3);Serial.print(";");          // Data 2  
+    Serial.print(_curr_z, 3);Serial.print(";");          // Data 3    
+    Serial.print(_curr_r, 6);Serial.print(";");          // Data 4  
+    // Vaccum pressure reading
+    //Serial.print(pressure);Serial.print(";");           // Data 5   
+    //Serial.print(pressure_change);Serial.print(";");    // Data 6 
+    // Selected air source (Byte): 0--> vacuum_on (Vacuum), 1-->vacuum_off (Ambient), 2--> puff (Compressed air)
+    // Direct reading from valves digital I/O
+    Serial.print(_valvesState);Serial.print(";");       // Data 7 
+    // (Byte): 0--> vacuum_on, 1-->vacuum_off, 2--> puff
+    // Selected mode through serial command
+    // VacuumMode and ValvesState should match
+    //Serial.print(vacuumMode);Serial.print(";");         // Data 8  
+    // Result of pickup action (Byte): 0 --> Undefined ; 1 --> Succcess; 2 --> Lowest Level Reached
+    Serial.print(_descendMode_result);Serial.print(";");  // Data 9   
+ 
+    // SCARA control mode (Byte): STP / MAN / HOM / TRAJ / VEL
+    Serial.print(_controlMode);Serial.print(";");       // Data 10     
+    // (Boolean): 1 = Robot is Moving
+    Serial.print(_isMoving);Serial.print(";");           // Data 11    
+    // Oriental Motor Drivers Outputs: th1/th2 ready, th1/th2 moving
+ 
+    Serial.print(_th1_isReady);Serial.print(";");        // Data 12     
+    Serial.print(_th2_isReady);Serial.print(";");        // Data 13
+    Serial.print(_th1_isMoving);Serial.print(";");       // Data 14
+    Serial.print(_th2_isMoving);Serial.print(";");       // Data 15
+    Serial.print(_isPS24V_ok);Serial.print(";");        // Data 16
+    Serial.print(_isPS48V_ok);Serial.print(";");        // Data 17
+
+    // Raises alarm if either motor th1 or th2 are not moving when they should be (indicates a problem with driver/hardware)
+    //Serial.print(alarm);Serial.print(";");              // Data 18
+    // Main loop execution time    
+    //Serial.print(duration);Serial.print(";");           // Data 19
+    // Last serial command code received (char)
+    //Serial.print(system_paused);Serial.print(";");      // Data 20
+
+    //Serial.print(th1_temp, 6);Serial.print(";");        // Data 21
+    //Serial.print(th2_temp, 6);Serial.print(";");        // Data 22
+    //Serial.print(th3_temp, 6);Serial.print(";");        // Data 23
+
+    //Serial.print(first_char);Serial.println(";");       // Data 24
+
+  }
+}
+
+#pragma region Setup_Stepper_Motors
+
+void ScaraDue::_initialiseAxesParameters(){
+  // Z Axis
+  Z._ppr = Z_PPR;
+  Z._pitch_mm = Z_PITCH;
   Z._minStep = Z._pitch_mm / Z._ppr;
-  //Z._minStep = 2 * PI / Z._ppr;
   Z._arePinsConfigured = true;
-  Serial.println("2 - Z Axis Set");
+
+  // TH1 Axis
+  TH1._ppr = XY_PPR;
+  TH1._minStep = 2 * PI / TH1._ppr;
+  TH1._arePinsConfigured = true;
+
+  // TH2 Axis
+  TH2._ppr = XY_PPR;   
+  TH2._minStep = 2 * PI / TH2._ppr;
+  TH2._arePinsConfigured = true;
+
+  // TH3 Axis
+  TH3._ppr = R_PPR;
+  TH3._minStep = 2 * PI / TH3._ppr;
+  TH3._arePinsConfigured = true;
+
+}
+
+/** Enable motors GPIO Port registers and configure them as Outputs
+*/
+bool ScaraDue::_initialiseMotorPins(){
+  Serial.println("Start Initialise Motor Pins...");
+  
+  Initialise_PORT_CLOCK(GPIO_PORT_STEPPERS);
+  //Pio* GPIO_x = GPIO_PORT_STEPPERS;
+  if(Z._arePinsConfigured && TH1._arePinsConfigured && TH2._arePinsConfigured & TH3._arePinsConfigured){
+
+    uint32_t pin_mask = (1<<PIN_TH3_PULSE) | (1<<PIN_TH3_DIR) | (1<<PIN_Z_PULSE) | (1<<PIN_Z_DIR) | (1<<PIN_TH2_CW) | (1<<PIN_TH2_CCW) | (1<<PIN_TH1_CW) | (1<<PIN_TH1_CCW);
+      // Enable PIO (Peripheral I/O) for the specified pins
+      GPIO_PORT_STEPPERS->PIO_PER |= pin_mask;
+      // Set pins as output
+      GPIO_PORT_STEPPERS->PIO_OER |= pin_mask; 
+      Serial.println("6 - Pins Initialisation SUCCESS");
+      return true;
+  }else{
+    Serial.println("6 - Pins Initialisation FAIL");
+    return false;
+  }
 }
 
 /** Toggle Z pulse pin
 */
 void ScaraDue::_step_Z(){
-  _toggleMotorPin(_PLS_PIN_Z, Z._pulseStatus);
+  _toggleMotorPin(PIN_Z_PULSE, Z._pulseStatus);
 }
 
 /** Set direction of the Z motor. Direction depends on the motor wiring
@@ -97,35 +257,21 @@ void ScaraDue::_step_Z(){
 */
 void ScaraDue::_setDirection_Z(bool dir){
   if (dir == true) {
-    _setMotorPin(_DIR_PIN_Z);
+    _setMotorPin(PIN_Z_DIR);
     Z._dir = 1;
   } else {
-    _clearMotorPin(_DIR_PIN_Z);
+    _clearMotorPin(PIN_Z_DIR);
     Z._dir = -1;
   }  
-}
-
-/** Set axis TH1 main parameters
- * @param PPR axis pulses per revolution
- * @param cw_pulse_pin port pin number (not physical pin) to execute one step in CW direction
- * @param ccw_pulse_pin port pin number (not physical pin) to execute one step in CCW direction
-*/
-void ScaraDue::SetAxis_TH1(uint32_t PPR, uint8_t cw_pulse_pin, uint8_t ccw_pulse_pin){
-  _PLSCW_PIN_TH1 = cw_pulse_pin;
-  _PLSCCW_PIN_TH1 = ccw_pulse_pin;
-  TH1._ppr = PPR;
-  TH1._minStep = 2 * PI / TH1._ppr;
-  TH1._arePinsConfigured = true;
-  Serial.println("3 - TH1 Axis Set");
 }
 
 /** Toggle TH1 pulse pin
 */
 void ScaraDue::_step_TH1(){
   if (TH1._dir == 1)
-    _toggleMotorPin(_PLSCW_PIN_TH1, TH1._pulseStatus);
+    _toggleMotorPin(PIN_TH1_CW, TH1._pulseStatus);
   else
-    _toggleMotorPin(_PLSCCW_PIN_TH1, TH1._pulseStatus);  
+    _toggleMotorPin(PIN_TH1_CCW, TH1._pulseStatus);  
 }
 
 /** Set direction of the TH1 motor. Driver must be set to 2-pulse input mode
@@ -139,27 +285,13 @@ void ScaraDue::_setDirection_TH1(bool dir){
     TH1._dir = -1;
 }
 
-/** Set axis TH2 main parameters
- * @param PPR axis pulses per revolution
- * @param cw_pulse_pin port pin number (not physical pin) to execute one step in CW direction
- * @param ccw_pulse_pin port pin number (not physical pin) to execute one step in CCW direction
-*/
-void ScaraDue::SetAxis_TH2(uint32_t PPR, uint8_t cw_pulse_pin, uint8_t ccw_pulse_pin){
-  _PLSCW_PIN_TH2 = cw_pulse_pin;
-  _PLSCCW_PIN_TH2 = ccw_pulse_pin;
-  TH2._ppr = PPR;   
-  TH2._minStep = 2 * PI / TH2._ppr;
-  TH2._arePinsConfigured = true;
-  Serial.println("4 - TH2 Axis Set");
-}
-
 /** Toggle TH2 pulse pin
 */
 void ScaraDue::_step_TH2(){
   if (TH2._dir == 1)
-    _toggleMotorPin(_PLSCW_PIN_TH2, TH2._pulseStatus);
+    _toggleMotorPin(PIN_TH2_CW, TH2._pulseStatus);
   else
-    _toggleMotorPin(_PLSCCW_PIN_TH2, TH2._pulseStatus); 
+    _toggleMotorPin(PIN_TH2_CCW, TH2._pulseStatus); 
 }
 
 /** Set direction of the TH2 motor. Driver must be set to 2-pulse input mode
@@ -173,24 +305,10 @@ void ScaraDue::_setDirection_TH2(bool dir){
     TH2._dir = -1;
 }
 
-/** Set axis TH3 main parameters
- * @param PPR axis pulses per revolution
- * @param pulse_pin port pin number (not physical pin) of the pulse signal
- * @param dir_pin pin used for setting motor direction (port pin unmber)
-*/
-void ScaraDue::SetAxis_TH3(uint32_t PPR, uint8_t pulse_pin, uint8_t dir_pin){
-  _PLS_PIN_TH3 = pulse_pin;
-  _DIR_PIN_TH3 = dir_pin;
-  TH3._ppr = PPR;
-  TH3._minStep = 2 * PI / TH3._ppr;
-  TH3._arePinsConfigured = true;
-  Serial.println("5 - TH3 Axis Set");
-}
-
 /** Toggle TH3 pulse pin
 */
 void ScaraDue::_step_TH3(){
-  _toggleMotorPin(_PLS_PIN_TH3, TH3._pulseStatus);
+  _toggleMotorPin(PIN_TH3_PULSE, TH3._pulseStatus);
 }
 
 /** Set direction of the TH3 motor. Direction depends on the motor wiring
@@ -198,129 +316,438 @@ void ScaraDue::_step_TH3(){
 */
 void ScaraDue::_setDirection_TH3(bool dir){
   if (dir) {
-    _setMotorPin(_DIR_PIN_TH3);
+    _setMotorPin(PIN_TH3_DIR);
     TH3._dir = 1;
   } else {
-    _setMotorPin(_DIR_PIN_TH3);
+    _setMotorPin(PIN_TH3_DIR);
     TH3._dir = -1;
   }  
 }
 
-/** Enable motors GPIO Port registers and configure them as Outputs
-*/
-bool ScaraDue::_initialiseMotorPins(){
-  if(Z._arePinsConfigured && TH1._arePinsConfigured && TH2._arePinsConfigured & TH3._arePinsConfigured){
-
-    uint32_t pin_mask = (1<<_PLS_PIN_Z) | (1<<_DIR_PIN_Z) | (1<<_PLSCW_PIN_TH1) | (1<<_PLSCCW_PIN_TH1) | (1<<_PLSCW_PIN_TH2) | (1<<_PLSCCW_PIN_TH2) | (1<<_PLS_PIN_TH3) | (1<<_DIR_PIN_TH3);
-      // Enable PIO (Peripheral I/O) for the specified pins
-      _GPIO_STEPPERS->PIO_PER |= pin_mask;
-      // Set pins as output
-      _GPIO_STEPPERS->PIO_OER |= pin_mask; 
-      Serial.println("6 - Pins Initialisation SUCCESS");
-      return true;
-  }else{
-    Serial.println("6 - Pins Initialisation FAIL");
-    return false;
-  }
-}
-
-//NOTE: test using |= instead of = to set individual bits
 void ScaraDue::_toggleMotorPin(uint32_t pin_mask, volatile bool &pin_status) {
   if (pin_status) {
-    _GPIO_STEPPERS->PIO_CODR |= (1<<pin_mask); // Clear Output Data Register
+    GPIO_PORT_STEPPERS->PIO_CODR |= (1<<pin_mask); // Clear Output Data Register
     pin_status = false;
   } else {
-    _GPIO_STEPPERS->PIO_SODR |= (1<<pin_mask); // Set Output Data Register
+    GPIO_PORT_STEPPERS->PIO_SODR |= (1<<pin_mask); // Set Output Data Register
     pin_status = true;
   }
 }
 void ScaraDue::_setMotorPin(uint32_t pin_mask) {
-  _GPIO_STEPPERS->PIO_SODR |= (1 << pin_mask);
+  GPIO_PORT_STEPPERS->PIO_SODR |= (1 << pin_mask);
 }
 void ScaraDue::_clearMotorPin(uint32_t pin_mask) {
-  _GPIO_STEPPERS->PIO_CODR |= (1 << pin_mask);
+  GPIO_PORT_STEPPERS->PIO_CODR |= (1 << pin_mask);
 }
 
 #pragma endregion
 
+#pragma region th1_th2_IO_signals
 
-
-/** Initialise SCARA robot
- * (Not Finished)
-*/
-bool ScaraDue::Init(){
-  // configure Timers
-  _prescaler = 8;
-
-  // configure / Initialise axes
-  bool init_motor_pins = _initialiseMotorPins();
-  _lowest_z = 100;
-
-  Z._minPos = 0;
-  Z._maxPos = 100;
-  _L1 = 200;
-  _L2 = 200;
-
-  return init_motor_pins;
+/// @brief Configure limit swithces pins
+void ScaraDue::_setLimitSwitchesPins(){
+  GPIO_Pin_Setup(GPIO_PORT_STEPPERS, PIN_Z_LimSw, Input);
+  GPIO_Pin_Setup(GPIO_PORT_STEPPERS, PIN_TH3_LimSw, Input);  
 }
 
-/** Run this function on the main loop to update periodically the robot position.
- * The position calulation is based on the motor step count, which is done on the timer interrupts
-*/
-void ScaraDue::UpdateEndEffectorCartesianPosition(){
-  if(_isHomed){
-    // disable interrupts momentarily to avoid a timer interrupt changing the value of the step position while reading
-    noInterrupts();
-    Z._pos = Z._posSteps * Z._minStep;
-    TH1._pos = TH1._posSteps * TH1._minStep;
-    TH2._pos = TH2._posSteps * TH2._minStep;
-    TH3._pos = TH3._posSteps * TH3._minStep;
-    interrupts();
-    _curr_x = float(_L1 * cos(TH1._pos) + _L2 * cos(TH1._pos + TH2._pos));
-    _curr_y = float(_L1 * sin(TH1._pos) + _L2 * sin(TH1._pos + TH2._pos));
-    _curr_z = float(Z._pos);
-    _curr_r = float(TH3._pos + (TH1._pos + TH2._pos)); 
-  }
-  else{
-    _curr_x = -999;
-    _curr_y = -999;
-    _curr_z = -999;
-    _curr_r = -999;     
-  }
+/// @brief Set IO signals pins for Oriental Motor driver TH1
+void ScaraDue::_setIOSignalsPins_TH1(){
+  GPIO_Pin_Setup(GPIO_PORT_STEPPERS, PIN_TH1_HOME, Output);
+  GPIO_Pin_Setup(GPIO_PORT_STEPPERS, PIN_TH1_STOP, Output);
+  GPIO_Pin_Setup(GPIO_PORT_STEPPERS, PIN_TH1_MOVING, Input_PullUp);
+  GPIO_Pin_Setup(GPIO_PORT_STEPPERS, PIN_TH1_READY, Input_PullUp);
+
+  GPIO_Pin_Write(GPIO_PORT_STEPPERS, PIN_TH1_STOP, false);  // Disable motion
+  GPIO_Pin_Write(GPIO_PORT_STEPPERS, PIN_TH1_HOME, false);
+  GPIO_Pin_Write(GPIO_PORT_STEPPERS, PIN_TH1_STOP, true);   // Enabale motion  
 }
 
-/** Get Current Robot Position
- * @return current end-effector position
-*/
-PositionXYZR ScaraDue::GetCurrentPosition(){
-  PositionXYZR currPos;
-  if(_isHomed){        
-    currPos.X = _curr_x;
-    currPos.Y = _curr_y;
-    currPos.Z = _curr_z;
-    currPos.R = _curr_r; 
+/// @brief Set IO signals pins for Oriental Motor driver TH2
+void ScaraDue::_setIOSignalsPins_TH2(){
+  GPIO_Pin_Setup(GPIO_PORT_STEPPERS, PIN_TH2_HOME, Output);
+  GPIO_Pin_Setup(GPIO_PORT_STEPPERS, PIN_TH2_STOP, Output);
+  GPIO_Pin_Setup(GPIO_PORT_STEPPERS, PIN_TH2_MOVING, Input_PullUp);
+  GPIO_Pin_Setup(GPIO_PORT_STEPPERS, PIN_TH2_READY, Input_PullUp);
+
+  GPIO_Pin_Write(GPIO_PORT_STEPPERS, PIN_TH2_STOP, false);  // Disable motion
+  GPIO_Pin_Write(GPIO_PORT_STEPPERS, PIN_TH2_HOME, false);
+  GPIO_Pin_Write(GPIO_PORT_STEPPERS, PIN_TH2_STOP, true);   // Enabale motion  
+}
+
+/// @brief Check if joints TH1 and TH2 are moving
+void ScaraDue::Check_Th1Th2_isMoving(){
+  _th1_isMoving = !GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_TH1_MOVING);
+  _th2_isMoving = !GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_TH2_MOVING);
+  //_th1_isMoving = !digitalRead(TH1_Moving);  //1-> Not moving; 0-> Moving
+  //_th2_isMoving = !digitalRead(TH2_Moving); 
+}
+
+/// @brief Check if joints TH1 and TH2 are ready to move
+void ScaraDue::Check_Th1Th2_isReady(){
+  _th1_isReady = !GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_TH1_READY);
+  _th2_isReady = !GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_TH2_READY);  
+}
+
+#pragma endregion
+
+#pragma region Setup_Auxiliary_Components
+
+bool ScaraDue::_valveStateChanged(){
+  _lastVS[_vsChanged_Idx] = _valvesState;
+  _vsChanged_Idx = (_vsChanged_Idx + 1) % 5;
+  for(uint8_t i = 0; i < 5; i++){
+    if(_lastVS[0] != _lastVS[i])
+      return true;
+  }
+  return false;
+}
+
+bool ScaraDue::_vacuumModeChanged(){
+  _lastVM[_vmChanged_Idx] = _vacuumMode;
+  _vmChanged_Idx = (_vmChanged_Idx + 1) % 5;
+  for(uint8_t i = 0; i < 5; i++){
+    if(_lastVM[0] != _lastVM[i])
+      return true;
+  }
+  return false;
+}
+
+/// @brief Enable port peripheral clock and initialise GPIOs, LED panels and pressure sensor
+void ScaraDue::_setAuxiliaryComponents(){
+  // Enable PORT Peripheral Clock
+  Initialise_PORT_CLOCK(GPIO_PORT_AUXILIARY);
+  // Set Ring Led Pin
+  GPIO_Pin_Setup(GPIO_PORT_AUXILIARY, PIN_RING_LED, Output);
+
+  // Set Valves Pins
+  GPIO_Pin_Setup(GPIO_PORT_AUXILIARY, PIN_VALVE_1, Output);
+  GPIO_Pin_Setup(GPIO_PORT_AUXILIARY, PIN_VALVE_2, Output);
+
+  // Initialise LED Arrays
+  _initLEDArray();
+
+  // Set Power Supply Feedback Pins
+  GPIO_Pin_Setup(GPIO_PORT_AUXILIARY, PIN_PS24V_OK, Input_PullUp);
+  GPIO_Pin_Setup(GPIO_PORT_AUXILIARY, PIN_PS48V_OK, Input_PullUp);
+  //pinMode(28, INPUT_PULLUP);
+  //pinMode(29, INPUT_PULLUP);
+  _initAMS();
+
+  _pressureFilterGain = 0.45;
+
+}
+
+/// @brief Initialise pressure sensor : AMS 5812-0150-D , differential/relative, 0 ...1034 mbar, 0 ...15 psi
+void ScaraDue::_initAMS() {
+  // Sensor Type: 5812
+  // I2C Address: 0x78
+  // Pressure Range: 0 ...1034 mbar
+  dPress = AMS(5812, 0x78,0,1034);
+
+  // SENSORS:
+  // AMS 5812-0150-D , differential/relative, 0 ...1034 mbar, 0 ...15 psi (0-103,400 Pa)
+  // AMS 5812-0050-D , differential/relative, 0 ...344.7 mbar, 0 ...5 psi (0-34,470 Pa)
+
+}
+
+float ScaraDue::readAirPressure(){
+  if (dPress.Available() == true) {
+    float pressure = dPress.readPressure();
+    if(!isnan(pressure)){
+      return pressure;      
+    }else{
+      return -200;   
+    }
   }else{
-    currPos.X = -999;
-    currPos.Y = -999;
-    currPos.Z = -999;
-    currPos.R = -999;     
-  }
-  return currPos;
+    return -100;   
+  } 
 }
+
+void ScaraDue::SetBackLightBrightness(uint8_t panel_number, uint8_t brightness, uint8_t color){
+  if (brightness > 255)
+    brightness = 255;   
+  else if (brightness < 0)
+    brightness = 0;
+  
+  FastLED.setBrightness(brightness);
+
+  if(panel_number >= 0){
+    for (int i = 0; i <= NUM_PANELS; i++) {
+      if(i == panel_number)
+        fill_solid(backLitPanels[i], NUM_LEDS_PANEL, colors[color]);
+      else  
+        fill_solid(backLitPanels[i], NUM_LEDS_PANEL, CRGB::Black);
+    }
+  }else if(panel_number == -1){
+    for (int i = 0; i <= NUM_PANELS; i++) {
+      fill_solid(backLitPanels[i], NUM_LEDS_PANEL, colors[i]);   
+    }
+  }else if(panel_number == -2){
+    for (int i = 0; i <= NUM_PANELS; i++) {
+      fill_solid(backLitPanels[i], NUM_LEDS_PANEL, colors[color]);   
+    }
+  }
+  FastLED.show();  
+
+}
+
+/// @brief Control LED backlight panels
+/// @param panel_number panel to control
+/// @param brightness desired brightness level of the panel 0-255
+/// @param color color of the panel
+void ScaraDue::SetBackLightBrightness(uint8_t panel_number, uint8_t brightness, CRGB::HTMLColorCode color){
+  if (brightness > 255)
+    brightness = 255;   
+  else if (brightness < 0)
+    brightness = 0;
+  
+  FastLED.setBrightness(brightness);
+
+  if(panel_number >= 0){
+    for (int i = 0; i <= NUM_PANELS; i++) {
+      if(i == panel_number)
+        fill_solid(backLitPanels[i], NUM_LEDS_PANEL, color);
+      else  
+        fill_solid(backLitPanels[i], NUM_LEDS_PANEL, CRGB::Black);
+    }
+  }else if(panel_number == -1){
+    for (int i = 0; i <= NUM_PANELS; i++) {
+      fill_solid(backLitPanels[i], NUM_LEDS_PANEL, colors[i]);   
+    }
+  }else if(panel_number == -2){
+    for (int i = 0; i <= NUM_PANELS; i++) {
+      fill_solid(backLitPanels[i], NUM_LEDS_PANEL, color);   
+    }
+  }
+  FastLED.show();  
+
+  //  if (brightness != 0)
+  //    backLightState = true;
+  //  else
+  //    backLightState = false;
+
+}
+
+/// @brief Initialise LED Array panels
+void ScaraDue::_initLEDArray(){
+  CRGB raw_leds[NUM_LEDS];
+  colors[0] = CRGB::White;
+  colors[1] = CRGB::Red;
+  colors[2] = CRGB::Green;
+  colors[3] = CRGB::Blue;
+  colors[4] = CRGB::Black;
+  colors[5] = CRGB::OrangeRed;
+  //colors[5] = {CRGB::White, CRGB::Red, CRGB::Green, CRGB::Blue, CRGB::Black, CRGB::OrangeRed};
+  CRGBSet leds(raw_leds, NUM_LEDS);
+  CRGBSet panel_1(leds(0,63));
+  CRGBSet panel_2(leds(64,127));
+  CRGBSet panel_3(leds(128,191));
+  CRGBSet panel_4(leds(192,255));
+  CRGBSet panel_5(leds(256,319));
+
+  *backLitPanels[0] = panel_1;
+  *backLitPanels[1] = panel_2;
+  *backLitPanels[2] = panel_3;
+  *backLitPanels[3] = panel_4;
+  *backLitPanels[4] = panel_5;
+
+  // In C++, template argument deduction relies on compile-time constants when deducing template arguments. When you define _LED_ARRAY_PIN as int, 
+  // it becomes a variable, not a compile-time constant
+  FastLED.addLeds<WS2812B, _LED_ARRAY_PIN, GRB>(leds, NUM_LEDS);
+  FastLED.clear();
+  FastLED.show();
+
+  //struct CRGB *backLitPanels[] ={panel_1, panel_2, panel_3, panel_4, panel_5};
+}
+
+
+
+/// @brief Turn Ring LED ON/OFF
+/// @param state Set TRUE to turn LED ON.
+void ScaraDue::RingLEDControl(bool state){
+  GPIO_Pin_Write(GPIO_PORT_AUXILIARY, PIN_RING_LED, state);
+  //ring_pin_state = state;
+}
+
+/// @brief Read the state of the valves to know pressure state at the pick-up tool
+/// @return 0--> vacuum_on, 1-->vacuum_off, 2--> puff
+uint8_t ScaraDue::readValves(){
+  bool valve1 = GPIO_Pin_Read(GPIO_PORT_AUXILIARY, PIN_VALVE_1);
+  bool valve2 = GPIO_Pin_Read(GPIO_PORT_AUXILIARY, PIN_VALVE_2);
+  if(valve1 && valve2){
+    return 0;
+  }else if(!valve1 && valve2){
+    return 1;
+  }else if(!valve1 && !valve2){
+    return 2;
+  }else{
+    return 3;
+  }
+}
+
+/// @brief Turn pick-up tool vacuum ON
+void ScaraDue::vacuum_on(){
+  GPIO_Pin_Write(GPIO_PORT_AUXILIARY, PIN_VALVE_1, true);
+  GPIO_Pin_Write(GPIO_PORT_AUXILIARY, PIN_VALVE_2, true);
+  _vacuumMode = 0;
+}
+
+/// @brief Turn pick-up tool vacuum OFF
+void ScaraDue::vacuum_off(){
+  GPIO_Pin_Write(GPIO_PORT_AUXILIARY, PIN_VALVE_1, false);
+  GPIO_Pin_Write(GPIO_PORT_AUXILIARY, PIN_VALVE_2, true);
+  _vacuumMode = 1;
+}
+
+/// @brief Blow air through pick-up tool (puff)
+void ScaraDue::puff(){
+  GPIO_Pin_Write(GPIO_PORT_AUXILIARY, PIN_VALVE_1, false);
+  GPIO_Pin_Write(GPIO_PORT_AUXILIARY, PIN_VALVE_2, false);
+  _vacuumMode = 2;
+}
+
+/// @brief Setup Release With Puff parameters
+/// @param offTime_ms time in miliseconds to wait before the puff starts 
+/// @param puffTime_ms puff time in miliseconds
+void ScaraDue::StartReleaseWthPuff(float offTime_ms, float puffTime_ms){
+  if(puffTime_ms < SAMPLE_TIME)
+    puffTime_ms = SAMPLE_TIME;
+  if(offTime_ms < SAMPLE_TIME)
+    offTime_ms = SAMPLE_TIME; 
+
+  _puffInit = (uint8_t)(offTime_ms/SAMPLE_TIME); 
+  _puffEnd = (uint8_t)(puffTime_ms/SAMPLE_TIME);   
+  _releaseWithPuff = true;
+  _releaseCount = 0;
+}
+
+/// @brief Run this function inside main loop to execute Release With Puff action
+void ScaraDue::_releaseWthPuff(){
+  if(!_releaseWithPuff)
+    return;
+  if(_releaseCount == 0){
+    vacuum_off();
+  }else if(_releaseCount == _puffInit){
+    puff();
+  }else if(_releaseCount == _puffEnd){
+    vacuum_off();
+    _releaseWithPuff = false;
+    //vacuumMode = 0;
+  }
+  _releaseCount++;
+}
+
+#pragma endregion
+
+#pragma region Robot_Homing
+
+bool ScaraDue::_executeHomingProcedure(){
+  if(!_homingStarted)
+    return false;
+
+  // Clear XY homing pulse
+  if(_xyHomePulseSent && !_xyHomePulseCleared){
+    _xyHomePulseCleared = true;
+    GPIO_Pin_Write(GPIO_PORT_STEPPERS, PIN_TH1_HOME, false);
+    GPIO_Pin_Write(GPIO_PORT_STEPPERS, PIN_TH2_HOME, false);    
+  }
+
+  // Send pulse to start XY homing
+  if(_isHomed_Z && !_isHomed_XY && !_xyHomePulseSent){
+    _homeStart_XY();
+    _th1_isMoving = true;
+    _th2_isMoving = true;
+  }
+  // NOTE: try putting this before the _homeStartXY
+  // Indicate XY homing has finished
+  if (_xyHomePulseSent && !_th1_isMoving && !_th2_isMoving && !_th1_isReady && !_th2_isReady){
+    _isHomed_XY = true;
+  }
+
+  // Start R homing routine
+  if(_isHomed_Z && _isHomed_XY && !_rHomingStarted){
+    _homeStart_R();
+  }
+
+  if(_isHomed_Z && _isHomed_XY && _isHomed_R){
+    _isHomed = true;
+    _controlMode = STP;
+    _homingStarted = false;
+  }
+
+}
+
+bool ScaraDue::StartHomingProcedure(float home_x, float home_y, float home_z, float home_r){
+  // Make sure the robot is in stop mode
+  if(_controlMode != STP)
+    return false;
+  InitialiseRobotPosition(home_x, home_y, home_z, home_r);  
+  _isHomed = false;
+  _isHomed_Z = false;
+  _isHomed_XY = false;
+  _isHomed_R = false;
+  _homingStarted = true;
+  _xyHomePulseSent = false;
+  _xyHomePulseCleared = false;
+  _rHomingStarted = false;
+
+  _homeStart_Z();
+  
+}
+
+void ScaraDue::_homeStart_Z(){
+  _controlMode = HOM;
+  _LimSw_VALUE_Z = GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_Z_LimSw);
+  Z._freq = 10000;
+  _setDirection_Z(true);
+  _startZTimer();
+}
+
+void ScaraDue::_homeStart_XY(){
+  _controlMode = HOM;
+  GPIO_Pin_Write(GPIO_PORT_STEPPERS, PIN_TH1_HOME, true);
+  GPIO_Pin_Write(GPIO_PORT_STEPPERS, PIN_TH2_HOME, true);
+  _xyHomePulseSent = true;
+}
+
+void ScaraDue::_homeStart_R(){
+  _controlMode = HOM;
+  _LimSw_VALUE_TH3 = GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_TH3_LimSw);
+  TH3._freq = 1000;
+  _setDirection_TH3(true);
+  _startTh3Timer();
+  _rHomingStarted = true;
+}
+
+void ScaraDue::InitialiseRobotPosition(float x, float y, float z, float r){
+
+  _inverseKinematics(x, y, &TH1._pos, &TH2._pos);
+  Z._pos = z;
+  TH3._pos = r;
+
+  TH1._posSteps = 0;
+  TH2._posSteps = 0;
+  Z._posSteps = 0;
+  TH3._posSteps = 0;
+
+  _isHomed = true;
+  
+}
+
+# pragma endregion
 
 #pragma region Run_Control_Modes
 
-/** Move the motors a given number of steps at a given frequency
- * @param steps_z number of steps to move in the z motor
- * @param steps_th1 number of steps to move in the th1 motor
- * @param steps_th2 number of steps to move in the th2 motor
- * @param steps_th3 number of steps to move in the th3 motor
- * @param freq_hz frequency of the steps in hz
- * @return true if successfull
-*/
+/// @brief Move the motors a given number of steps at a given frequency
+/// @param steps_z number of steps to move in the z motor
+/// @param steps_th1 number of steps to move in the th1 motor 
+/// @param steps_th2 number of steps to move in the th2 motor 
+/// @param steps_th3 number of steps to move in the th3 motor 
+/// @param freq_hz frequency of the steps in hz 
+/// @return true if successfull 
 bool ScaraDue::Move_ManualMode(int32_t steps_z, int32_t steps_th1, int32_t steps_th2, int32_t steps_th3, uint32_t freq_hz){
   // Make sure the robot is in stop mode
-  if(controlMode != STP)
+  if(_controlMode != STP)
     return false;
 
   // Set Motors Direction
@@ -362,7 +789,7 @@ bool ScaraDue::Move_ManualMode(int32_t steps_z, int32_t steps_th1, int32_t steps
   Serial.print("stepper _freq: ");Serial.println(freq_hz);
 
   // Start Timers
-  controlMode = MAN;
+  _controlMode = MAN;
   if(Z._targetSteps > 0)
     _startZTimer();
   if(TH1._targetSteps > 0)
@@ -387,7 +814,7 @@ bool ScaraDue::Move_ManualMode(int32_t steps_z, int32_t steps_th1, int32_t steps
 */
 bool ScaraDue::Move_TrajectoryMode(float trg_x, float trg_y, float trg_z, float trg_r, float t_xyr, float t_z){
   // Make sure the robot is in stop mode
-  if(controlMode != STP)
+  if(_controlMode != STP)
     return false; 
   // 1 - Check if target position is within range of motion
   if(!_isHomed)
@@ -433,6 +860,7 @@ bool ScaraDue::Move_TrajectoryMode(float trg_x, float trg_y, float trg_z, float 
 
   // 5 - If moving UP, move Z first and then rest. If moving DOWN, move XYR plane first and then Z
   _setVelocityDirectionFlags(0,0,0,0);
+  _controlMode = TRAJ;
   if ((_isMovingUp && _isMovingZ) || (_isMovingZ && !_isMovingXYR)) {   
     //Initialise z timer
     _isMovingZ = false;
@@ -445,10 +873,73 @@ bool ScaraDue::Move_TrajectoryMode(float trg_x, float trg_y, float trg_z, float 
     }
 
   }  
-
   return true;
 
  
+}
+
+void ScaraDue::_zLinearAccelerationSetup(float vf_mms, float acc_dist_mm){
+  uint32_t _max_wf_freq = VARIANT_MCK / (2 * _prescaler);
+  _accSteps = (int)(acc_dist_mm * Z._ppr / Z._pitch_mm);
+  int trg_freq = (int)(vf_mms * Z._ppr / Z._pitch_mm);
+  float acc = _convert_AccSteps_2_AccRads2(trg_freq, _accSteps, Z._minStep);
+  _c0 = (int)(0.676 * _max_wf_freq * sqrt(2 * Z._minStep / acc));
+}
+
+bool ScaraDue::Move_VelocityMode(float vel_mms, float acc_time_sec, uint8_t axis){
+  // axis--> 0:Z-axis; 1:X-axis;  2:Y-axis  //(Not implemented) 3:R-axis
+  if(_controlMode != STP)
+    return false;
+  if(!_isHomed)
+    return false;  
+  
+  _stopVelMode = false;
+  _lowest_z = 0;
+  _refAirPressure = 100000;
+  
+  // Z-AXIS MOVEMENT
+  if(axis == 0){
+    _descentMode = 0;
+    Z._currentSteps = 0;
+    if(vel_mms > 0)
+      _setDirection_Z(true);
+    else
+      _setDirection_Z(false);
+
+    _setVelocityDirectionFlags(0,0,vel_mms, 0);
+
+    _zLinearAccelerationSetup(vel_mms, 2);
+    
+    Z._targetSteps = (long)((_curr_z - _lowest_z)/Z._minStep);
+
+    if(_accSteps*2 > Z._targetSteps){ // DescendMode_TotalSteps = Z._targetSteps
+      _accSteps = (int)(Z._targetSteps/2);
+    }
+    _decStart = Z._targetSteps - _accSteps;
+
+    Z._freq = (VARIANT_MCK / _prescaler) / _c0;
+    _prev_counter_value = _c0;
+    _rest = 0;  
+    _controlMode = VEL;
+    _startZTimer(); 
+
+  // XY-AXIS MOVEMENT
+  }else{
+    if(axis==1){
+      v_X = vel_mms;
+      v_Y = 0;
+    }else{
+      v_X = 0;
+      v_Y = vel_mms;      
+    }
+    _t7_freq = (uint32_t)(1/(acc_time_sec/10));
+    _velMode_rampCount = 0;
+    _setVelocityDirectionFlags(v_X,v_Y,0, 0);
+    _timerStart(TC2, 1, TC7_IRQn, _t7_freq);
+  }
+
+  
+  return true;
 }
 
 /// @brief Move in Trajectory Mode but allows moving in one direction only by indicating the distance to move and the direction
@@ -456,9 +947,9 @@ bool ScaraDue::Move_TrajectoryMode(float trg_x, float trg_y, float trg_z, float 
 /// @param axis axis to move - Z(0), X(1), Y(2), R(3)
 /// @param t_time trajectory time
 /// @return true if successfull
-bool ScaraDue::Move_TrajectoryMode_SingleAxis(float distance, int axis, float t_time){
+bool ScaraDue::Move_TrajectoryMode_SingleAxis(float distance, uint8_t axis, float t_time){
   // Make sure the robot is in stop mode
-  if(controlMode != STP)
+  if(_controlMode != STP)
     return false;
   if(!_isHomed)
     return false;  
@@ -485,6 +976,7 @@ bool ScaraDue::Move_TrajectoryMode_SingleAxis(float distance, int axis, float t_
   // TH2._freq = round(1 / _ti_xyr);
   // TH3._freq = round(1 / _ti_xyr);
 
+  _controlMode = TRAJ;
   if (_isMovingZ) {
     _trajectoryCalculationZ(t_time, _curr_z + distance);
     _setVelocityDirectionFlags(0, 0, distance, 0);
@@ -514,9 +1006,9 @@ bool ScaraDue::Move_TrajectoryMode_SingleAxis(float distance, int axis, float t_
 /// @param descent_mode 1 -> Controlled descend for pickup, 2 -> Controlled descend for jig load
 /// @param acc_dist_mm distance in mm until final velocity is reached
 /// @return TRUE if successful
-bool ScaraDue::setupDescendModeTrajectory(float lowest_z_mm, float vf_mms, float pressure_threshold, uint8_t descent_mode, float acc_dist_mm){
+bool ScaraDue::Move_ControlledDescendMode(float lowest_z_mm, float vf_mms, float pressure_threshold, uint8_t descent_mode, float acc_dist_mm){
   // Make sure the robot is in stop mode
-  if(controlMode != STP)
+  if(_controlMode != STP)
     return false;
   if (descent_mode != 1 && descent_mode != 2)
     return false;
@@ -530,11 +1022,7 @@ bool ScaraDue::setupDescendModeTrajectory(float lowest_z_mm, float vf_mms, float
   if(acc_dist_mm < 0)
     acc_dist_mm = 1;
 
-  uint32_t _max_wf_freq = VARIANT_MCK / (2 * _prescaler);
-  _accSteps = (int)(acc_dist_mm * Z._ppr / Z._pitch_mm);
-  int trg_freq = (int)(vf_mms * Z._ppr / Z._pitch_mm);
-  float acc = _convert_AccSteps_2_AccRads2(trg_freq, _accSteps, Z._minStep);
-  _c0 = (int)(0.676 * _max_wf_freq * sqrt(2 * Z._minStep / acc));
+  _zLinearAccelerationSetup(vf_mms, acc_dist_mm);
 
   Z._targetSteps = (long)((_curr_z - _lowest_z)/Z._minStep);
   //DescendMode_TotalSteps = (long)((_curr_z - lowest_z)/Z._minStep);
@@ -552,7 +1040,7 @@ bool ScaraDue::setupDescendModeTrajectory(float lowest_z_mm, float vf_mms, float
   //Z._freq = VM_Z_f0;
   Z._currentSteps = 0;
   //DescendMode_CurrentStepCount = 0;
-  controlMode = VEL;   // Set Control Mode (Speed Control)
+  _controlMode = VEL;   // Set Control Mode (Speed Control)
   _stopVelMode = false;
 
   _startZTimer();     
@@ -1105,16 +1593,6 @@ bool ScaraDue::_checkValidTrajectory(float trg_x, float trg_y) {
 
 // ------------------------------------ NOT CHECKED ---------------------------------- //
 
-
-
-
-
-
-
-
-
-
-
 #pragma endregion
 
 #pragma region Timers_Control_Routines
@@ -1175,6 +1653,7 @@ void ScaraDue::_startZTimer() {  //Start the timer at the right frequency and se
   }
   
 }
+
 void ScaraDue::_startTh1Timer() {  //Start the timer at the right _frequency and set Z-timer state to true
   TH1._currentSteps = 0;
   TH1._i = 0;
@@ -1185,6 +1664,7 @@ void ScaraDue::_startTh1Timer() {  //Start the timer at the right _frequency and
   }
 
 }
+
 void ScaraDue::_startTh2Timer() {  //Start the timer at the right frequency and set Z-timer state to true
   TH2._currentSteps = 0;
   TH2._i = 0;
@@ -1194,6 +1674,7 @@ void ScaraDue::_startTh2Timer() {  //Start the timer at the right frequency and 
     TH2._isTimerOn = true;
   }
 }
+
 void ScaraDue::_startTh3Timer() {  //Start the timer at the right frequency and set Z-timer state to true
   TH3._currentSteps = 0;
   TH3._i = 0;
@@ -1210,18 +1691,6 @@ void ScaraDue::_startXYRTimers() {
   _startTh2Timer();
   _startTh3Timer();
 
-  // if (!TH1._isTimerOn) {
-  //   _timerStart(TC1, 1, TC4_IRQn, TH1._freq);
-  //   TH1._isTimerOn = true;
-  // }
-  // if (!TH2._isTimerOn) {
-  //   _timerStart(TC1, 2, TC5_IRQn, TH2._freq);
-  //   TH2._isTimerOn = true;
-  // }
-  // if (!TH3._isTimerOn) {
-  //   _timerStart(TC2, 0, TC6_IRQn, TH3._freq);
-  //   TH3._isTimerOn = true;
-  // }
 }
 
 void ScaraDue::_initialiseAllTimers() {
@@ -1230,51 +1699,22 @@ void ScaraDue::_initialiseAllTimers() {
   _startXYRTimers();
 }
 
-
-// Initialise Timer for R Axis Motion
-// void StartRTimer() {  //Start the timer at the right frequency and set Z-timer state to true
-//   if (!TH3.isTimerOn) {
-//     _timerStart(TC2, 0, TC6_IRQn, TH3._freq);
-//     TH3.isTimerOn = true;
-//   }
-// }
-
-// void ScaraDue::SetupMotorsBeforeStart() {
-//   // Setup Z Axis
-//   Z._currentSteps = 0;
-//   Z._i = 0;
-//   //Z._freq = freq_init;
-//   // Setup XYR plane
-//   TH1._currentSteps = 0;
-//   TH1._i = 0;
-
-//   TH2._currentSteps = 0;
-//   TH2._i = 0;
-
-//   TH3._currentSteps = 0;
-//   TH3._i = 0;
-// }
-
-// Start Timer7. Used in Speed Control Mode to coordinate XYR Timers
-// void Start_VM_XY_Timer() {
-//   Timer7_On = true;
-//   _timerStart(TC2, 1, TC7_IRQn, T7_freq);
-// }
-
 void ScaraDue::_stopAllTimers() {
-
+  _controlMode = STP;
   _stopTimerZ();
   _stopTimerTH1();
   _stopTimerTH2();
   _stopTimerTH3();
+
+  _timerStop(TC2, 1, TC7_IRQn);
 
   // if (!Z.isTimerOn && !TH1.isTimerOn && !TH2.isTimerOn && !TH3.isTimerOn && Timer7_On) {
   //   Timer7_On = false;
   //   _timerStop(TC2, 1, TC7_IRQn);
   // }
 
-
 }
+
 void ScaraDue::_stopTimerZ() {
 
   if (Z._isTimerOn) {
@@ -1282,11 +1722,11 @@ void ScaraDue::_stopTimerZ() {
       _step_Z();
     }
     Z._isTimerOn = false;
-    _timerStop(TC1, 0, TC3_IRQn);
-    Serial.println(" * Z Timer Stopped");
   }
-
+  _timerStop(TC1, 0, TC3_IRQn); // For extra safety, stop timer in any case
+  Serial.println(" * Z Timer Stopped");
 }
+
 void ScaraDue::_stopTimerTH1() {
 
   if (TH1._isTimerOn) {
@@ -1295,10 +1735,11 @@ void ScaraDue::_stopTimerTH1() {
     }
     TH1._isTimerOn = false;
     TH1._isMoving = false;
-    _timerStop(TC1, 1, TC4_IRQn);
-    Serial.println(" * TH1 Timer Stopped");
   }
+  _timerStop(TC1, 1, TC4_IRQn);
+  Serial.println(" * TH1 Timer Stopped");  
 }
+
 void ScaraDue::_stopTimerTH2() {
   if (TH2._isTimerOn) {
     if (TH2._pulseStatus == HIGH) {
@@ -1306,10 +1747,11 @@ void ScaraDue::_stopTimerTH2() {
     }
     TH2._isTimerOn = false;
     TH2._isMoving = false;
-    _timerStop(TC1, 2, TC5_IRQn);
-    Serial.println(" * TH2 Timer Stopped");
   }
+  _timerStop(TC1, 2, TC5_IRQn);
+  Serial.println(" * TH2 Timer Stopped");  
 }
+
 void ScaraDue::_stopTimerTH3() {
 
   if (TH3._isTimerOn) {
@@ -1317,9 +1759,9 @@ void ScaraDue::_stopTimerTH3() {
       _step_TH3();
     }
     TH3._isTimerOn = false;
-    _timerStop(TC2, 0, TC6_IRQn);
-    Serial.println(" * TH3 Timer Stopped");
   }
+  _timerStop(TC2, 0, TC6_IRQn);
+  Serial.println(" * TH3 Timer Stopped");  
 }
 
 #pragma endregion
@@ -1330,7 +1772,7 @@ void ScaraDue::MotorRun_Z(){
   // if (system_paused) {
   //   return;
   // }  
-  switch (controlMode) {
+  switch (_controlMode) {
     case STP:  // If the robot is in STOP mode, disable timer
       Z._isTimerOn = false;
       _timerStop(TC1, 0, TC3_IRQn);
@@ -1350,6 +1792,17 @@ void ScaraDue::MotorRun_Z(){
       }
       break;
     case HOM: //Homing Mode
+      if(_LimSw_VALUE_Z){
+        _step_Z();   // Perform Step
+        _LimSw_VALUE_Z = GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_Z_LimSw);
+      }else{
+        _LimSw_VALUE_Z = GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_Z_LimSw);
+        if(!_LimSw_VALUE_Z){
+          _isHomed_Z = true;
+          _stopTimerZ();
+        }
+      }
+      
       // if (Z_LimSw_Val == HIGH) {
       //   _step_Z();
       //   Z_LimSw_Val = digitalRead(Z_LimSw_PIN);
@@ -1569,7 +2022,7 @@ void ScaraDue::MotorRun_TH1(){
   //   return;
   // }
 
-  switch (controlMode) {
+  switch (_controlMode) {
     case STP:   // If the robot is in STOP mode, disable timer
       TH1._isTimerOn = false;
       _timerStop(TC1, 1, TC4_IRQn);
@@ -1651,6 +2104,11 @@ void ScaraDue::MotorRun_TH1(){
       }
       break;
     case VEL:   // Speed Mode Operation
+
+      if (_stopVelMode) {  // Start deceleration phase
+      
+      }
+
       _step_TH1();   // Perform Step
       if (TH1._pulseStatus == HIGH) { // Update motor positions when step pin is HIGH
         TH1._posSteps += TH1._dir;
@@ -1667,7 +2125,7 @@ void ScaraDue::MotorRun_TH2(){
   // }
 
   //Serial.println("IN2");
-  switch (controlMode) {
+  switch (_controlMode) {
     case STP:   // If the robot is in STOP mode, disable timer
       TH2._isTimerOn = false;
       _timerStop(TC1, 2, TC5_IRQn);
@@ -1760,7 +2218,7 @@ void ScaraDue::MotorRun_TH3(){
   //   return;
   // }
 
-  switch (controlMode) {
+  switch (_controlMode) {
     case STP:   // If the robot is in STOP mode, disable timer
       TH3._isTimerOn = false;
       _timerStop(TC2, 0, TC6_IRQn);
@@ -1780,16 +2238,17 @@ void ScaraDue::MotorRun_TH3(){
       }
       break;
     case HOM: //Homing Mode
-      // if (R_LimSw_Val == HIGH) {
-      //   _step_TH3();
-      //   R_LimSw_Val = digitalRead(R_LimSw_PIN);
-      // } else {
-      //   R_LimSw_Val = digitalRead(R_LimSw_PIN);
-      //   if (!R_LimSw_Val == HIGH) {
-      //     _isHomed_R = true;
-      //     _stopTimerTH3();
-      //   }
-      // }
+      if(_LimSw_VALUE_TH3){
+        _step_TH3();   // Perform Step
+        _LimSw_VALUE_TH3 = GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_TH3_LimSw);
+      }else{
+        _LimSw_VALUE_TH3 = GPIO_Pin_Read(GPIO_PORT_STEPPERS, PIN_TH3_LimSw);
+        if(!_LimSw_VALUE_TH3){
+          _isHomed_R = true;
+          _stopTimerTH3();
+        }
+      }    
+
       break;
     case TRAJ:  // Trajectory Mode Operation
       if (_isHomed == false) {   // Exit timer if robot not homed
@@ -1851,6 +2310,83 @@ void ScaraDue::MotorRun_TH3(){
   }  
 }
 
+void ScaraDue::Timer7(){
+  if (_isHomed == false)
+    _stopAllTimers();
+  float v_X_temp, v_Y_temp;
+
+  // Deceleration phase (_stopVelMode = true)  
+  if(_stopVelMode){ 
+    v_X_temp = v_X * (10 - _velMode_rampCount) / 10;
+    v_Y_temp = v_Y * (10 - _velMode_rampCount) / 10;
+    if(_velMode_rampCount < 10)
+      _velMode_rampCount++;
+    else
+      _stopAllTimers();  
+  // Acceleration phase      
+  }else if (_velMode_rampCount < 10){ // _velModeAccSteps
+    v_X_temp = v_X * (_velMode_rampCount + 1) / 10;
+    v_Y_temp = v_Y * (_velMode_rampCount + 1) / 10;
+    _velMode_rampCount++;
+  // Constant Speed Phase
+  }else{
+    v_X_temp = v_X;
+    v_Y_temp = v_Y;
+  }
+
+  double th1_temp = TH1._pos;
+  double th2_temp = TH2._pos;
+  float L = 200;
+
+  // Inverse Jacobian to obtain target joint velocities (th1_d, th2_d, th3_d)
+  float th1_d = (float)cos(th1_temp + th2_temp) * v_X_temp / (L * (float)sin(th2_temp)) + (float)sin(th1_temp + th2_temp) * v_Y_temp / (L * (float)sin(th2_temp));
+  float th2_d = -((float)cos(th1_temp) + (float)cos(th1_temp + th2_temp)) * v_X_temp / (L * (float)sin(th2_temp)) - ((float)sin(th1_temp) + (float)sin(th1_temp + th2_temp)) * v_Y_temp / (L * (float)sin(th2_temp));
+  float th3_d = -(th1_d + th2_d);  
+
+  _setVelocityDirectionFlags(v_X_temp, v_Y_temp, 0, th3_d);
+  // Set directions of the stepper motors
+
+  TH1._freq = (2 * abs(th1_d) * TH1._ppr / (2 * PI));
+  if (TH1._freq < _t7_freq * 2) {
+    _stopTimerTH1();
+  }
+  TH2._freq = (2 * abs(th2_d) * TH2._ppr / (2 * PI));
+  if (TH2._freq < TH1._freq * 2) {
+    _stopTimerTH2();
+  }
+  TH3._freq = (2 * abs(th3_d) * TH3._ppr / (2 * PI));
+  if (TH3._freq < _t7_freq * 2) {
+    _stopTimerTH3();
+  }
+
+  //On the first iteration, start the X-Y-R timers. On the following ones just update their frequencies
+  if (_velMode_rampCount == 1 && !_stopVelMode) {
+    _controlMode = VEL;
+    _startXYRTimers();
+  }else{
+    if (TH1._isTimerOn) {
+      _timerUpdate(TC1, 1, TC4_IRQn, TH1._freq);
+    }else if (TH1._freq >= TH1._freq * 2) {
+      _timerStart(TC1, 1, TC4_IRQn, TH1._freq);
+      TH1._isTimerOn = true;
+    }
+
+    if (TH2._isTimerOn) {
+      _timerUpdate(TC1, 2, TC5_IRQn, TH2._freq);
+    }else if (TH2._freq >= TH2._freq * 2) {
+      _timerStart(TC1, 2, TC5_IRQn, TH2._freq);
+      TH2._isTimerOn = true;
+    }
+
+    if (TH3._isTimerOn) {
+      _timerUpdate(TC2, 0, TC6_IRQn, TH3._freq);
+    }else if (TH3._freq >= TH3._freq * 2) {
+      _timerStart(TC2, 0, TC6_IRQn, TH3._freq);
+      TH3._isTimerOn = true;
+    }    
+  }
+}
+
 void TC3_Handler()  //Z - VERTICAL AXIS
 {
   TC_GetStatus(TC1, 0);
@@ -1876,4 +2412,53 @@ void TC6_Handler()  //TH1 - SHOULDER JOINT
   SCARA.MotorRun_TH3();
 }
 
+void TC7_Handler(){
+  TC_GetStatus(TC2, 1);
+  SCARA.Timer7();
+}
+
 #pragma endregion
+
+/** Run this function on the main loop to update periodically the robot position.
+ * The position calulation is based on the motor step count, which is done on the timer interrupts
+*/
+void ScaraDue::UpdateEndEffectorCartesianPosition(){
+  if(_isHomed){
+    // disable interrupts momentarily to avoid a timer interrupt changing the value of the step position while reading
+    noInterrupts();
+    Z._pos = Z._posSteps * Z._minStep;
+    TH1._pos = TH1._posSteps * TH1._minStep;
+    TH2._pos = TH2._posSteps * TH2._minStep;
+    TH3._pos = TH3._posSteps * TH3._minStep;
+    interrupts();
+    _curr_x = float(_L1 * cos(TH1._pos) + _L2 * cos(TH1._pos + TH2._pos));
+    _curr_y = float(_L1 * sin(TH1._pos) + _L2 * sin(TH1._pos + TH2._pos));
+    _curr_z = float(Z._pos);
+    _curr_r = float(TH3._pos + (TH1._pos + TH2._pos)); 
+  }
+  else{
+    _curr_x = -999;
+    _curr_y = -999;
+    _curr_z = -999;
+    _curr_r = -999;     
+  }
+}
+
+/** Get Current Robot Position
+ * @return current end-effector position
+*/
+PositionXYZR ScaraDue::GetCurrentPosition(){
+  PositionXYZR currPos;
+  if(_isHomed){        
+    currPos.X = _curr_x;
+    currPos.Y = _curr_y;
+    currPos.Z = _curr_z;
+    currPos.R = _curr_r; 
+  }else{
+    currPos.X = -999;
+    currPos.Y = -999;
+    currPos.Z = -999;
+    currPos.R = -999;     
+  }
+  return currPos;
+}
