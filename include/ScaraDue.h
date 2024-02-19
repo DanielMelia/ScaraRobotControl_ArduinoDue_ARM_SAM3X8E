@@ -4,19 +4,22 @@
 #include "Arduino.h"
 #include "Stepper.h"
 #include "utils.h"
+#include "AMS.h"
+#include "FastLED/FastLED.h"
+#include "RobotConfig.h"
 
 #define vec_length 100                // Length of the look-up vectors
 #define freq_init 1000
 
 // Other motor pins
-#define TH1_Zhome 37  // Signal to send Oriental Motors to home position
-#define TH2_Zhome 36
-#define TH1_Moving 35 // Signal to read if Oriental Motors are moving
-#define TH2_Moving 34
-#define TH1_Stop 32  // Signal to send Oriental Motors to stop
-#define TH2_Stop 33 
-#define TH1_Ready 38 // Signal to read if Oriental Motors are ready to move
-#define TH2_Ready 39
+//#define TH1_Zhome 37  // Signal to send Oriental Motors to home position
+//#define TH2_Zhome 36
+//#define TH1_Moving 35 // Signal to read if Oriental Motors are moving
+//#define TH2_Moving 34
+//#define TH1_Stop 32  // Signal to send Oriental Motors to stop
+//#define TH2_Stop 33 
+//#define TH1_Ready 38 // Signal to read if Oriental Motors are ready to move
+//#define TH2_Ready 39
 
 //------------------------------------------ CONTROL MODES -------------------------------------------------------------//
 enum ControlMode{
@@ -28,67 +31,137 @@ enum ControlMode{
     CDM     // CONTROLLED DESCENT MODE: for Z-axis only. Mode moves down at controlled speed while monitoring the vacuum (for pick-up or similar)
 };
 
-enum PinMode{
-    Output,
-    Input,
-    Input_PullUp
-};
+
 
 class ScaraDue
 {
     public:
+
+        // Public Read-Only Members
+        bool isHomed() {return _isHomed;}
+        bool isMoving() {return _isMoving;}
+
         // Axes Objects
         Stepper Z;
         Stepper TH1;
         Stepper TH2;
         Stepper TH3;
-        //Stepper steppers[4];
-        ControlMode controlMode;
-        bool isHomed() {return _isHomed;}
-        
-        // Set Stepper Motors Parameters
-        void SetSteppersGPIOPort(Pio* GPIO_x);
-        void SetAxis_Z(uint32_t PPR, float pitch, uint8_t pulse_pin, uint8_t dir_pin);
-        void SetAxis_TH1(uint32_t PPR, uint8_t cw_pulse_pin, uint8_t ccw_pulse_pin);
-        void SetAxis_TH2(uint32_t PPR, uint8_t cw_pulse_pin, uint8_t ccw_pulse_pin);
-        void SetAxis_TH3(uint32_t PPR, uint8_t pulse_pin, uint8_t dir_pin);
-        bool Init();
 
+        // 
+
+        bool Init();
+        void MainLoopFunction(bool serialSend);        
+        
         // Home
-        bool StartHomingProcedure(float home_x, float home_y, float home_z, float home_r);
-        bool ExecuteHomingProcedure();
+
+        bool StartHomingProcedure(float home_x, float home_y, float home_z, float home_r);    // Serial Command      
+        void InitialiseRobotPosition(float x, float y, float z, float r);    // Serial Command
 
         // Setup Different Motion Control Modes
-        bool Move_ManualMode(int32_t steps_z, int32_t steps_th1, int32_t steps_th2, int32_t steps_th3, uint32_t freq_hz);
-        bool Move_TrajectoryMode(float trg_x, float trg_y, float trg_z, float trg_r, float t_xyr, float t_z);
-        bool Move_TrajectoryMode_SingleAxis(float step_size, int axis, float t_time);
-        bool setupDescendModeTrajectory(float lowest_z_mm, float vf_mms, float pressureThreshold, uint8_t descent_mode, float acc_dist_mm = -1);
+        
+        bool Move_ManualMode(int32_t steps_z, int32_t steps_th1, int32_t steps_th2, int32_t steps_th3, uint32_t freq_hz);    // Serial Command
+        bool Move_TrajectoryMode(float trg_x, float trg_y, float trg_z, float trg_r, float t_xyr, float t_z);    // Serial Command
+        bool Move_TrajectoryMode_SingleAxis(float step_size, uint8_t axis, float t_time);    // Serial Command
+        bool Move_ControlledDescendMode(float lowest_z_mm, float vf_mms, float pressureThreshold, uint8_t descent_mode, float acc_dist_mm = -1);    // Serial Command
+        bool Move_VelocityMode(float vel_mms, float acc_time_sec, uint8_t axis);
+        void Stop(){_stopAllTimers();}    // Serial Command
 
-        // Interrupt Service Routines - to be runned inside the Timer Interrupt Handler
+        // TODO: Need to implement Stop With Deceleration and Move Velocity Mode - will need timer 7 
+
+        // Interrupt Service Routines - to be run inside the Timer Interrupt Handler
+
         void MotorRun_Z();
         void MotorRun_TH1();
         void MotorRun_TH2();
         void MotorRun_TH3();
+        void Timer7();
 
         // Get Feedback Functions
-        void UpdateEndEffectorCartesianPosition();
+
+        void UpdateEndEffectorCartesianPosition(); // main loop function
         PositionXYZR GetCurrentPosition();
-        bool checkPositionIsWithinWS(float x, float y, float z, float r);
+        bool checkPositionIsWithinWS(float x, float y, float z, float r); // main loop function
+        void Check_Th1Th2_isMoving(); // main loop function
+        void Check_Th1Th2_isReady(); // main loop function
+        float readAirPressure(); // main loop function
+        uint8_t readValves(); // main loop function
+
+        // Auxiliary Components: pressure sensor, valves, LEDs...
+
+        void SetBackLightBrightness(uint8_t panel_number, uint8_t brightness, CRGB::HTMLColorCode color);
+        void SetBackLightBrightness(uint8_t panel_number, uint8_t brightness, uint8_t color);   //  Serial Command
+        void RingLEDControl(bool state);    //  Serial Command
+        void vacuum_on();   //  Serial Command
+        void vacuum_off();  //  Serial Command
+        void puff();
+        void StartReleaseWthPuff(float offTime_ms, float puffTime_ms);  // Serial Command   
+
+        void DEV_testAuxiliaryPins();
+        void DEV_testStepPins();
+        void DEV_testPressureSensor();
+
+
+        // Set Stepper Motors Parameters
+        //void SetSteppersGPIOPort(Pio* GPIO_x);
+        //void SetAxis_Z(uint32_t PPR, float pitch, uint8_t pulse_pin, uint8_t dir_pin);
+        //void SetAxis_TH1(uint32_t PPR, uint8_t cw_pulse_pin, uint8_t ccw_pulse_pin);
+        //void SetAxis_TH2(uint32_t PPR, uint8_t cw_pulse_pin, uint8_t ccw_pulse_pin);
+        //void SetAxis_TH3(uint32_t PPR, uint8_t pulse_pin, uint8_t dir_pin);
+        //void SetIOSignalsPins_TH1(uint8_t home_pin, uint8_t stop_pin, uint8_t isMoving_pin, uint8_t isReady_pin);
+        //void SetIOSignalsPins_TH2(uint8_t home_pin, uint8_t stop_pin, uint8_t isMoving_pin, uint8_t isReady_pin);
+        //void SetLimitSwitchesPins(uint8_t z_limitswitch_pin, uint8_t th3_limitswitch_pin);
 
     private:
+
+        bool _executeHomingProcedure(); // main loop function
+        void _releaseWthPuff(); // main loop function
+        void _initAMS();
+        void _initLEDArray();
+        void _initialiseAxesParameters();   // init function
+        bool _initialiseMotorPins();   // init function
+        void _setIOSignalsPins_TH1();   // init function
+        void _setIOSignalsPins_TH2();   // init function
+        void _setLimitSwitchesPins();   // init function
+        void _setAuxiliaryComponents();   // init function
+
+        ControlMode _controlMode;
+
+        CRGB colors[6];
+        struct CRGB *backLitPanels[NUM_PANELS];
+        //CRGB raw_leds[NUM_LEDS];
+        // Pressure Sensor: AMS 5812-0150-D , differential/relative, 0 ...1034 mbar, 0 ...15 psi
+        AMS dPress; //define the sensor's instance with the sensor's family, sensor's I2C address as well as its specified minimum and maximum pressure
+        // (5812, 0x78,0,1034)
         // ----------------------------------------------------- //
         // ---- Stepper Motors Pins Variables and Functions ---- //
         // ----------------------------------------------------- //
 
-        Pio* _GPIO_STEPPERS;
-        uint8_t _PLS_PIN_Z;
-        uint8_t _DIR_PIN_Z;
-        uint8_t _PLSCW_PIN_TH1;
-        uint8_t _PLSCCW_PIN_TH1;
-        uint8_t _PLSCW_PIN_TH2;
-        uint8_t _PLSCCW_PIN_TH2;
-        uint8_t _PLS_PIN_TH3;
-        uint8_t _DIR_PIN_TH3;
+        //Pio* _GPIO_STEPPERS;
+        // uint8_t _PLS_PIN_Z;
+        // uint8_t _DIR_PIN_Z;
+        // uint8_t _PLSCW_PIN_TH1;
+        // uint8_t _PLSCCW_PIN_TH1;
+        // uint8_t _PLSCW_PIN_TH2;
+        // uint8_t _PLSCCW_PIN_TH2;
+        // uint8_t _PLS_PIN_TH3;
+        // uint8_t _DIR_PIN_TH3;
+
+        // uint8_t _HOM_PIN_TH1;
+        // uint8_t _HOM_PIN_TH2;
+        // uint8_t _STP_PIN_TH1;
+        // uint8_t _STP_PIN_TH2;
+        // uint8_t _MOV_PIN_TH1;
+        // uint8_t _MOV_PIN_TH2;
+        // uint8_t _RDY_PIN_TH1;
+        // uint8_t _RDY_PIN_TH2;
+
+        // uint8_t _LimSw_PIN_Z;
+        // uint8_t _LimSw_PIN_TH3;
+
+        
+
+        bool _LimSw_VALUE_Z;
+        bool _LimSw_VALUE_TH3;
 
         void _step_Z();
         void _setDirection_Z(bool dir);
@@ -98,11 +171,15 @@ class ScaraDue
         void _setDirection_TH2(bool dir);
         void _step_TH3();
         void _setDirection_TH3(bool dir);
-        bool _initialiseMotorPins();
+        
 
         void _toggleMotorPin(uint32_t pin_mask, volatile bool &pin_status);
         void _setMotorPin(uint32_t pin_mask);
         void _clearMotorPin(uint32_t pin_mask);
+
+        void _homeStart_Z();
+        void _homeStart_XY();
+        void _homeStart_R();
 
         // ---------------------------------------- //
         // ---- Timers Variables and Functions ---- //
@@ -138,16 +215,18 @@ class ScaraDue
         volatile bool _isHomed_XY;
         volatile bool _isHomed_R;
         bool _homingStarted;
+        bool _xyHomePulseSent;
+        bool _xyHomePulseCleared;
+        bool _rHomingStarted;
         bool _isMoving;
         bool _isMovingUp;
         bool _isMovingXYR;
         bool _isMovingZ;
-        bool _stopVelMode;
-        bool _joystickControl;
 
         bool _th1_isMoving;
         bool _th2_isMoving;
-        void Check_Th1Th2_moving();
+        bool _th1_isReady;
+        bool _th2_isReady;       
 
         // ----------------------------------------------------------------------- //
         // ---- Current End-Effector Position and Workspace Limits and Checks ---- //
@@ -200,7 +279,20 @@ class ScaraDue
         volatile uint32_t _prev_counter_value;
         volatile uint32_t _rest;
         uint32_t _accSteps;   // Number of motor steps to reach the end of acceleration. Calculated based on acceleration distance   
-        uint32_t _decStart;    
+        uint32_t _decStart;   
+        void _zLinearAccelerationSetup(float vf_mms, float acc_dist_mm); 
+
+        // ----------------------------------------- //
+        // ---- Velocity Control Mode Variables ---- //
+        // ----------------------------------------- //
+
+        bool _stopVelMode;
+        //bool _joystickControl;
+        uint8_t _velMode_rampCount;
+        // _velModeAccSteps = 10;
+        float v_X;
+        float v_Y;
+        uint32_t _t7_freq;
 
         // ------------------------------------------- //
         // ---- Trajectory Control Mode Variables ---- //
@@ -226,6 +318,27 @@ class ScaraDue
 
         float _airPressure;
         float _refAirPressure;
+        float _prevAirPressure;
+        float _pressureChange;
+        float _pressureFilterGain;
+
+        uint8_t _puffInit;
+        uint8_t _puffEnd;
+        bool _releaseWithPuff;
+        uint8_t _releaseCount;
+
+        bool _isPS24V_ok;
+        bool _isPS48V_ok;
+
+        uint8_t _valvesState; // This reads directly the state of the valves
+        uint8_t _vacuumMode;  // This is the selected vacuum mode. Should match with _valvesState
+
+        bool _valveStateChanged();
+        bool _vacuumModeChanged();
+        uint8_t _lastVS[5];
+        uint8_t _lastVM[5];
+        uint8_t _vsChanged_Idx;
+        uint8_t _vmChanged_Idx;
 
 };
 
