@@ -1,81 +1,51 @@
 #include <Arduino.h>
 #include "ScaraDue.h"
 
-//ScaraDue SCARA;
-
-// GPIO PORT C
-// - C.6 (Pin 38)
-// - C.8 (Pin 40)
-// - C.19 (Pin 44)  -> Th3 Pulse
-// - C.17 (Pin 46)  -> Z Pulse
-// - C.15 (Pin 48)  -> Th2 ClockWise
-// - C.13 ((Pin 50) -> Th1 ClockWise
-// - C.12 (Pin 51)  -> Th1 Counter ClockWise
-// - C.14 (Pin 49)  -> Th2 Counter ClockWise
-// - C.16 (Pin 47)  -> Z Direction
-// - C.18 (Pin 45)  -> Th3 Direction
-// - C.9 (Pin 41)
-// - C.7 (Pin 39)
-// - C.4 (Pin 36)
-// - C.2 (Pin 34)
-// - C.1 (Pin 33)
-// - C.3 (Pin 35)
-// - C.5 (Pin 37)
-
-// 9 free pins (th1_home, th1_moving, th1_stop, th1_ready, th2_home, th2_moving, th2_stop, th2_ready)
-
 // Initialise variables
 static char firstChar;  // first char received indicates the command code
 static const u_int8_t BUFFER_SIZE = 30; // max command length
 static char buf[BUFFER_SIZE];   // incoming serial data
 static const u_int8_t MAX_ARGS = 9; // max number of arguments for a command
 static float args[MAX_ARGS];  // arguments array
-static uint32_t sample_time = 100; // Main loop 'cycle time' (delay at the end of the loop)
+bool _serialSend;
+//static uint32_t sample_time = 100; // Main loop 'cycle time' (delay at the end of the loop)
 
-void readSerialCommand();
-uint8_t splitCommand(char *ptr, const char *delimiter1, const char *delimiter2, char *cmdCode , float *cmdArgs);
+bool readSerialCommand();
 bool executeCommand(const char *cmdCode, float *cmdArgs, uint8_t argCount);
+uint8_t splitCommand(char *ptr, const char *delimiter1, const char *delimiter2, char *cmdCode , float *cmdArgs);
 
 int main(void){
+
+  // put your setup code here, to run once:
   Serial.begin(115200);
-  SCARA.SetSteppersGPIOPort(PIOC);
-  SCARA.SetAxis_Z(200, 5.0, 17, 16);  // PIN NUMBERS - pls: 46, dir: 47, ppr: 5000
-  SCARA.SetAxis_TH1(200, 13, 12);   // PIN NUMBERS - cw : 50, ccw: 51, ppr:100000
-  SCARA.SetAxis_TH2(200, 15, 14);   // PIN NUMBERS - cw : 48, ccw: 49, ppr:100000
-  SCARA.SetAxis_TH3(200, 19, 18);    // PIN NUMBERS - pls: 44, dir: 45, ppr:25000
+
   if (!SCARA.Init())
     Serial.println("SCARA INIT FAIL");
-  delay(1000);
-
-  //SCARA.Move_TrajectoryMode(10, 10, 0, 0, 0.8, 0);
-
-  SCARA.Move_ManualMode(20, 0, 0, 0, 50);
-  //delay(3000); // here we have to wait until previous move finishes (controlMode = STP)
-
-  while(SCARA.Z.isTimerOn() || SCARA.TH1.isTimerOn() || SCARA.TH2.isTimerOn() || SCARA.TH3.isTimerOn()){
-    delay(200);
-  }
-
-  SCARA.Move_ManualMode(-20, 0, 0, 0, 50);
 
   while(1){
+
     uint32_t start = millis(); // read start time
 
     // Read any incoming serial command
-    readSerialCommand();
+    bool readCmdOK = readSerialCommand();
 
-    // Read sensors and digital inputs status
-  
+    SCARA.MainLoopFunction(_serialSend);
+
+    if(_serialSend){
+
+
+    }
 
     uint32_t finish = millis();  // read finish time
     //Calculate cycle time duration
     uint32_t duration = finish - start;
     /*To obtain a fixed sample time, the cycle time duration is subtracted   
     from the sample time, and the difference is added to the code as a delay*/
-    uint32_t t_delay = sample_time - duration;
-    if (t_delay > 0) {delay(t_delay);}
-  }
+    int32_t t_delay = SAMPLE_TIME - duration;
+    if (t_delay > 0)
+      delay((uint32_t)t_delay);
 
+  }
 }
 
 
@@ -130,84 +100,119 @@ bool executeCommand(const char *cmdCode, float *cmdArgs, uint8_t argCount){ // s
   switch(*cmdCode){
     case 'A':
       //ambientLightControl((int)sub_command[0],(bool)sub_command[1]);
+      SCARA.RingLEDControl((bool)cmdArgs[0]);
       break;
     // CLOSE VALVES (VACUUM ON)
     case 'C': //C
+      SCARA.vacuum_on();
       break;
     // DESCEND FOR PICKUP    
     case 'D': //D:vel;lowest_z;ref_pressure;mode;acc_dist;   mode = 1 for pickup / mode = 2 for jig load
-      if(argCount < 4 || SCARA.controlMode != STP || !SCARA.isHomed())
+      if(argCount < 4 || SCARA.isMoving() || !SCARA.isHomed())
         return false;
       if(argCount == 4)
-        SCARA.setupDescendModeTrajectory(cmdArgs[1], cmdArgs[0], cmdArgs[2], (uint8_t)cmdArgs[3]);  
+        SCARA.Move_ControlledDescendMode(cmdArgs[1], cmdArgs[0], cmdArgs[2], (uint8_t)cmdArgs[3]);  
       else if(argCount == 5)
-        SCARA.setupDescendModeTrajectory(cmdArgs[1], cmdArgs[0], cmdArgs[2], (uint8_t)cmdArgs[3], cmdArgs[4]);  
+        SCARA.Move_ControlledDescendMode(cmdArgs[1], cmdArgs[0], cmdArgs[2], (uint8_t)cmdArgs[3], cmdArgs[4]);  
       break;
-    case 'E': //C
+    // EMERGENCY STOP   
+    case 'E': //Stop All Timers
+      SCARA.Stop();
       break;
     case 'F': //C
+
+
+
+
       break;
     // STEP INCREMENT MOTION  
     case 'G':  //G:step_size;axis;time;  //move a small increment in one axis
-      if(argCount < 3 || SCARA.controlMode != STP || !SCARA.isHomed())
+      if(argCount < 3 || SCARA.isMoving()|| !SCARA.isHomed())
         return false;
-      SCARA.Move_TrajectoryMode_SingleAxis(cmdArgs[0], (uint8_t)cmdArgs[1], cmdArgs[2]);
-      // else{
-      //   PositionXYZR currPos = SCARA.GetCurrentPosition();
-      //   if((int8_t)cmdArgs[1]==0)      
-      //     SCARA.Move_TrajectoryMode(currPos.X, currPos.Y, currPos.Z + cmdArgs[0], currPos.R, 0, cmdArgs[2]);
-      //   else if((int8_t)cmdArgs[1]==1)      
-      //     SCARA.Move_TrajectoryMode(currPos.X + cmdArgs[0], currPos.Y, currPos.Z, currPos.R, cmdArgs[2], 0);      
-      //   else if((int8_t)cmdArgs[1]==2)      
-      //     SCARA.Move_TrajectoryMode(currPos.X, currPos.Y + cmdArgs[0], currPos.Z, currPos.R, cmdArgs[2], 0);  
-      //   else if((int8_t)cmdArgs[1]==3)      
-      //     SCARA.Move_TrajectoryMode(currPos.X, currPos.Y, currPos.Z, currPos.R + cmdArgs[0], cmdArgs[2], 0);  
-      // }      
+      SCARA.Move_TrajectoryMode_SingleAxis(cmdArgs[0], (uint8_t)cmdArgs[1], cmdArgs[2]);    
       break; 
-    case 'H': //C
+    // SOFTWARE HOME  
+    case 'H': // H:xxx;yyy;zzz;rrr; Initialise end-effector position
+      if(argCount < 4 || SCARA.isMoving())
+        return false;
+        SCARA.InitialiseRobotPosition(cmdArgs[0], cmdArgs[1], cmdArgs[2], cmdArgs[3]);
       break;   
-    case 'I': //C
+    // INITIALISE SERIAL TRANSMISSION   
+    case 'I': //I:0/1; 1-> Initialise Serial Transmission, 0->Stop Serial Transmission
+      if(cmdArgs[0]>0){
+        _serialSend = true;
+      }else{
+        _serialSend = false;
+      }
       break;
     case 'J': //C
+
+
+
+
       break;
-    case 'L': //C
+    // BACKLIGHT CONTROL  
+    case 'L': //L:brightness;color;
+      if(argCount < 3)
+        return false;
+      SCARA.SetBackLightBrightness((uint8_t)cmdArgs[0], (uint8_t)cmdArgs[1], (uint8_t)cmdArgs[2]);
+      //SCARA.SetBackLightBrightness((uint8_t)cmdArgs[0], (uint8_t)cmdArgs[1], (CRGB::HTMLColorCode)cmdArgs[2]);
       break;
     // MANUAL MODE CONTROL   
     case 'M': //'M:Z;TH1;TH2;TH3;Freq;' commands are used to move a specific number of steps
-      if(argCount < 5 || SCARA.controlMode != STP || !SCARA.isHomed())
+      if(argCount < 5 || SCARA.isMoving())
         return false;
       SCARA.Move_ManualMode((int32_t)cmdArgs[0], (int32_t)cmdArgs[1], (int32_t)cmdArgs[2], (int32_t)cmdArgs[3], (int32_t)cmdArgs[4]);      
       break;
-    case 'O': //C
+    // OPEN VALVE (Vacuum Off)    
+    case 'O': //
+      SCARA.vacuum_off();
       break; 
-    case 'R': //C
-      break;                                 
+    // RELEASE WITH PUFF - Initialise Sequency  
+    case 'R': //R:off-time;puff-time;   // Set puff delay and puff time
+      if(argCount < 2)
+        return false;
+      SCARA.StartReleaseWthPuff((uint8_t)cmdArgs[0], (uint8_t)cmdArgs[1]);
+      break;    
+    // STOP WITH DECELERATION - Stop Speed Mode Control with Deceleration                               
     case 'S': //C
+
+
+
+
       break;
     // TRAJECTORY MODE CONTROL   
     case 'T': //T:xxx;yyy;zzz;rrr;t;t_z;
-      if(argCount < 6 || SCARA.controlMode != STP)
+      if(argCount < 6 || SCARA.isMoving() || !SCARA.isHomed())
         return false;  
-      SCARA.Move_TrajectoryMode(cmdArgs[0], cmdArgs[1], cmdArgs[2], cmdArgs[3], cmdArgs[4], cmdArgs[5]); 
-         
+      SCARA.Move_TrajectoryMode(cmdArgs[0], cmdArgs[1], cmdArgs[2], cmdArgs[3], cmdArgs[4], cmdArgs[5]);      
       break;
     case 'V': //C
-      break;
 
-    case 'Z': //C
+
+
+
+      break;
+    // HARDWARE HOME - Using limit switches and stepper driver home mode  
+    case 'Z': //Z:xxx;yyy;zzz;rrr;
+      if(argCount < 4 || SCARA.isMoving())
+        return false;    
+      SCARA.StartHomingProcedure(cmdArgs[0], cmdArgs[1], cmdArgs[2], cmdArgs[3]);    
       break;
         }
   return true;
 }
 
-void readSerialCommand(){
+bool readSerialCommand(){
     // check if data is available
   if (Serial.available()) {
     // read the incoming bytes:
     u_int8_t rlen = Serial.readBytesUntil('\n', buf, BUFFER_SIZE);
     if(rlen > 0){
       uint8_t argsNum = splitCommand(buf, ":", ";", &firstChar , args); //   
-      executeCommand(&firstChar, args, argsNum); //MAX_ARGS
+      if (!executeCommand(&firstChar, args, argsNum)){ //MAX_ARGS
+        return false;
+      } 
       // Clear whole buffer
       memset(buf, 0, BUFFER_SIZE);
       // Initialise arguments array
@@ -215,4 +220,5 @@ void readSerialCommand(){
         args[i]=-999;
     }
   }  
+  return true;
 }
