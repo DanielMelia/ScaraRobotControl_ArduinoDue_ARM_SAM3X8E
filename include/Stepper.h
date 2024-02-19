@@ -22,7 +22,7 @@ class Stepper
         float _maxPos;
         float _minPos; 
     // ---- motor main operational parameters ---- //
-        volatile float _pos = 0;              // current motor absolute position (in radians OR mm)
+        double _pos = 0;              // current motor absolute position (in radians OR mm)
         volatile uint8_t _dir;                 // motor direction (1,-1)
         volatile bool _pulseStatus = false;    // TRUE if PULSE pin is HIGH
         volatile uint32_t _freq;               // step frequency
