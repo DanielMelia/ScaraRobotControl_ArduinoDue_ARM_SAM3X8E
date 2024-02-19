@@ -6,6 +6,74 @@
  * _xyToAngularTrajectories : replace local variable L by byref parameters L1 and L2
 */
 
+void Initialise_PORT_CLOCK(Pio* GPIO_x){
+  // SAM3X Peripheral Identifiers (Datasheet table 9.1. , page 38)
+  // PIOA -> 11
+  // PIOB -> 12
+  // PIOC -> 13
+  // PIOD -> 14
+  // PIOE -> 15
+  // PIOF -> 16
+  // USART0 -> 17
+  // USART1 -> 18
+  // USART2 -> 19
+  // USART3 -> 20  
+  if(GPIO_x == PIOA){
+    PMC->PMC_PCER0 |= (1 << 11);
+  }else if(GPIO_x == PIOB){
+    PMC->PMC_PCER0 |= (1 << 12);
+  }else if(GPIO_x == PIOC){
+    PMC->PMC_PCER0 |= (1 << 13);
+  }else if(GPIO_x == PIOD){
+    PMC->PMC_PCER0 |= (1 << 14);
+  }
+
+
+}
+
+/// @brief Configure a GPIO pin as an Input/Output and configure the pull-up resistors
+/// @param GPIO_x GPIO port
+/// @param pin_number GPIO pin number
+/// @param mode pin mode: Output, Input or Input_PullUp
+void GPIO_Pin_Setup(Pio* GPIO_x, uint32_t pin_number, PinMode mode){
+  if(mode == Output){
+    GPIO_x->PIO_PER |= (1<<pin_number);  // Enable the GPIO pin
+    GPIO_x->PIO_OER |= (1<<pin_number);  // Enable output mode for the GPIO pin (set it as output)
+  }else if(mode == Input){
+    GPIO_x->PIO_PER |= (1<<pin_number);  // Enable the GPIO pin
+    GPIO_x->PIO_ODR |= (1<<pin_number);  // Disable output mode for the GPIO pin (set it as input)
+    GPIO_x->PIO_PUDR |= (1<<pin_number); // Disable pull-up resistor for the GPIO pin
+  }else if(mode == Input_PullUp){
+    //PMC->PMC_PCER0 |= ((1 << 14) | (1 << 15) | (1 << 16) | (1 << 17));
+    
+    GPIO_x->PIO_PER |= (1<<pin_number);  // Enable the GPIO pin
+    GPIO_x->PIO_ODR |= (1<<pin_number);  // Disable output mode for the GPIO pin (set it as input)
+    GPIO_x->PIO_PUER |= (1<<pin_number); // Enable pull-up resistor for the GPIO pin
+  }
+}
+
+/// @brief Read GPIO pin state
+/// @param GPIO_x  GPIO port
+/// @param pin_number GPIO pin number
+/// @return TRUE if pin is set HIGH. FALSE otherwise
+bool GPIO_Pin_Read(Pio* GPIO_x, uint32_t pin_number){
+  // Read the Pin Data Status Register
+  return (GPIO_x->PIO_PDSR & (1 << pin_number)) != 0; 
+  // Inequality comparison checks if the result of the bitwise and is not zero. If result is NOT ZERO, means pin is HIGH, and will return TRUE
+  // (PIOA_PDSR & (1 << pin)) ? HIGH : LOW // this uses ternary (or conditional) operator, and returs a uint8_t
+}
+
+/// @brief Writes HIGH/LOW to a GPIO pin
+/// @param GPIO_x  GPIO port
+/// @param pin_number GPIO pin number
+/// @param value TRUE sets the pin to HIGH. FALSE clears the pin
+void GPIO_Pin_Write(Pio* GPIO_x, uint32_t pin_number, bool value){
+  if(value)
+    GPIO_x->PIO_SODR |= (1 << pin_number); // Set output high
+  else
+    GPIO_x->PIO_CODR |= (1 << pin_number); // Set output low
+}
+
 bool getBit(uint8_t byte, uint8_t position) // position in range 0-7
 {
     return (byte >> position) & 0x1;
@@ -89,19 +157,19 @@ void _th3AngularTrajectory(const float *r1, const float *r2, float *r_out, float
 
 // TO DO: check formula to see which L0 is L1 and L2
 
-// /** Calculates the joint angles th1 and th2 based on an XY cartesian position
-//  * @param x X-coordinate in the cartesian space
-//  * @param y Y-coordinate in the cartesian space
-//  * @param th1 th1-coordinate in the joint space
-//  * @param th2 th2-coordinate in the joint space
-// */
-// void _inverseKinematics(float x, float y, float &th1, float &th2) {
-//   float L0 = 200;   // Arm segment length (mm)
-//   float cQk = (sq(x) + sq(y) - 2 * sq(L0)) / (2 * sq(L0));  //Compute sin and cos of elbow joint
-//   float sQk = -sqrt(1 - sq(cQk));
-//   th1 = atan2(y, x) - atan2(L0 * sQk, L0 + L0 * cQk);   // Compute th1 ('Shoulder Joint')
-//   th2 = atan2(sQk, cQk);    // Compute th2 ('Elbow Joint')
-// }
+/** Calculates the joint angles th1 and th2 based on an XY cartesian position
+ * @param x X-coordinate in the cartesian space
+ * @param y Y-coordinate in the cartesian space
+ * @param th1 th1-coordinate in the joint space
+ * @param th2 th2-coordinate in the joint space
+*/
+void _inverseKinematics(float x, float y, double *th1, double *th2) {
+  double L0 = 200;   // Arm segment length (mm)
+  double cQk = (sq(x) + sq(y) - 2 * sq(L0)) / (2 * sq(L0));  //Compute sin and cos of elbow joint
+  double sQk = -sqrt(1 - sq(cQk));
+  *th1 = atan2(y, x) - atan2(L0 * sQk, L0 + L0 * cQk);   // Compute th1 ('Shoulder Joint')
+  *th2 = atan2(sQk, cQk);    // Compute th2 ('Elbow Joint')
+}
 
 /** Calculates 3rd order polynomial path from current to target position in the XY plane passing through 1 or 2 via points
  * @param rx pointer to array of X-coordinate of the cartesian path
